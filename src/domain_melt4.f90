@@ -18,11 +18,15 @@ PROGRAM domain_melt4
   INTEGER :: xNNicecnt(27), xNNliqcnt(27), xNNholcnt(27), xtype, xoffset, yoffset, zoffset
 
   REAL(8) :: rx, fliq, fliqold, tmp, c2TCM
+  REAL(8) :: target_output_fractions(19)
   CHARACTER(len=64) :: outfn, inpfn
   
-  
+    
   OUTPUT = 1
-  
+  !** define target output melt fractions
+  target_output_fractions(:) = (/0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, &
+       0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95/) 
+
   !** compute all permutations of directions from a given point (to find NN)
   n=0
   DO i= -1,1
@@ -91,15 +95,33 @@ PROGRAM domain_melt4
   oTCM = NINT(DBLE(oTCM)/DBLE(NDIP))   !** total center of mass for the particle
   PRINT *, 'oTCM:', oTCM(:)
   PRINT *, 'done reading data', NDIP
+
+  !** output initial file in melt file format (just in case)
+           
+  fliq = 0.0
+  
+  PRINT '(5A)', '       ', '      iter', '   liquid', '    fraction', '   target' 
+  PRINT '(A,2I9,3G12.2)', 'output0:',  niter, 0, fliq, 0.0
+  IF (OUTPUT == 1) THEN
+     WRITE(outfn,'(''domain4_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
+     OPEN(OUTFID,file=outfn,status='unknown')
+     DO n = 1,NDIP
+        WRITE(OUTFID, '(6I9)') n, pos(n,1:3), domain(pos(n,1),pos(n,2),pos(n,3))
+     END DO
+     CLOSE(OUTFID)
+  END IF
+            
+
+
   
   !** domain is now populated with the occupied points
   
-  NNicecntmax = 1 !** initially
+  NNicecntmax = 5 !** initially
   niter = 0
   
   iterloop: DO
      niter = niter + 1
-     PRINT *, 'iteration #', niter
+!     PRINT *, 'iteration #', niter
      !** loop over the whole domain, and check for melting criteria
      icecnt      = 0
      liqcnt      = 0
@@ -150,35 +172,20 @@ PROGRAM domain_melt4
               END IF
            END DO NNloop1
            !** 2. check the melt criteria
-            IF (ctype == 1 .AND. NNicecnt <= NNicecntmax) THEN 
-               CALL RANDOM_NUMBER(rx)
-              IF (rx <= 1.0) THEN    !** rx is used reduce the number of melt events per iteration
+           IF (ctype == 1 .AND. NNicecnt <= NNicecntmax) THEN 
+              CALL RANDOM_NUMBER(rx)
+              !** reduce rx to have a finer melt fraction resolution (i.e., get closer to target melt fractions)
+              IF (rx <= 0.25) THEN    !** rx is used reduce the number of melt events per iteration
                  !** 3. melt the current particle 
                  domain(i,j,k) = -1  !** switch to melted 
                  ctype         = -1
                  meltcnt       = meltcnt + 1 !** only keep track of melting events
               END IF
            END IF
-           
-           !** trigger output when specific melt criteria are met
-           fliq = DBLE(liqcnt)/DBLE(NDIP)    !** volume fraction of liquid water
-            IF (fliq > fliqold * 1.2d0) THEN  !** if it's incresed by 20%, then output
-              PRINT '(A,2I9,G12.2, 3I5)', 'output1:',  niter, icecnt+liqcnt, fliq
-              fliqold = fliq
-              IF (OUTPUT == 1) THEN
-                 WRITE(outfn,'(''domain4_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
-                 OPEN(OUTFID,file=outfn,status='unknown')
-                 DO nn = 1,NDIP
-                    WRITE(OUTFID, '(6I9)') nn, pos(nn,1:3), domain(pos(nn,1),pos(nn,2),pos(nn,3))
-                 END DO
-                 CLOSE(OUTFID)
-              END IF
-           END IF
         END DO meltloop
         IF (meltcnt == 0) THEN !** no melting events occurred during this iteration
            NNicecntmax = NNicecntmax + 1  !** increase the melt threshhold 
         END IF
-        
      END IF
      
      moveiter = 0
@@ -270,10 +277,10 @@ PROGRAM domain_melt4
               END IF
               
            END DO NNloop2
-           IF (NNholcnt >= 26) THEN
-              PRINT *, 'orphan', n,m, cpos(1:3), NNicecnt, NNliqcnt, NNholcnt,MAXVAL(xNNicecnt(:)), maxval(xNNliqcnt(:))
-              !** special section to deal with orphans
-           END IF
+!!$           IF (NNholcnt >= 26) THEN
+!!$              PRINT *, 'orphan', n,m, cpos(1:3), NNicecnt, NNliqcnt, NNholcnt,MAXVAL(xNNicecnt(:)), maxval(xNNliqcnt(:))
+!!$              !** special section to deal with orphans
+!!$           END IF
            
            !** note: might need to randomly pick mx here, check for biases
            IF (MAXVAL(xNNicecnt(:)) > 0) THEN  !** of holes, were any of the holes' neighbors ice points?
@@ -304,11 +311,30 @@ PROGRAM domain_melt4
         
      END DO moveiterloop
      
+     !** trigger output when specific melt criteria are met
+     fliq = DBLE(liqcnt)/DBLE(NDIP)    !** volume fraction of liquid water
+
+     !** 0.02 below is the tunable parameter to control how close it gets to the target output fraction
+     IF (fliq > fliqold .AND. ANY(ABS(target_output_fractions(:) - fliq)/fliq < 0.02)) then
+        nn = MINVAL(MINLOC((ABS(target_output_fractions(:) - fliq)/fliq)))
+        PRINT '(A,2I9,2G12.2)', 'output1:',  niter, liqcnt, fliq, target_output_fractions(nn)
+        target_output_fractions(nn) = -99 !** once we've outputted at a specific volume fraction, remove it from the list
+        fliqold = fliq      
+        IF (OUTPUT == 1) THEN
+           WRITE(outfn,'(''domain4_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
+           OPEN(OUTFID,file=outfn,status='unknown')
+           DO nn = 1,NDIP
+              WRITE(OUTFID, '(6I9)') nn, pos(nn,1:3), domain(pos(nn,1),pos(nn,2),pos(nn,3))
+           END DO
+           CLOSE(OUTFID)
+        END IF
+     END IF
      
+
+     !** final output
      IF (icecnt == 0 .AND. meltcnt == 0 .AND. movecnt == 0) THEN
-        !** final output
         fliq = DBLE(liqcnt)/DBLE(NDIP)    !** volume fraction of liquid water
-        PRINT '(A,2I9,2G12.2)', 'output2:',  niter, icecnt, liqcnt, fliq
+        PRINT '(A,2I9,2G12.2)', 'output2:',  niter, liqcnt, fliq, 1.0
         IF (OUTPUT == 1) THEN
            WRITE(outfn,'(''domain4_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
            OPEN(OUTFID,file=outfn,status='unknown')
