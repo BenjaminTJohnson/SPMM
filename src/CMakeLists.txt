@@ -1,4 +1,4 @@
 
-add_executable (spmm domain_melt4.f90)
+add_executable (spmm domain_melt5.f90)
 
 
