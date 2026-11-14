@@ -19,6 +19,14 @@ PROGRAM domain_melt4
 
   REAL(8) :: rx, fliq, fliqold, tmp, c2TCM, gwt
   REAL(8) :: target_output_fractions(19)
+
+  !** mass conservation: ice (916.7 kg/m3 at 0C) melts to a smaller volume of water (999.84 kg/m3),
+  !** so each melted ice dipole yields rho_ratio water dipoles.  The shortfall is accumulated in
+  !** 'debt'; each time it reaches one whole dipole the melting dipole is removed instead of
+  !** becoming liquid.  Removed dipoles are flagged with pos(n,1) = -1 and are not written out.
+  REAL(8), PARAMETER :: rho_ratio = 916.7d0/999.84d0
+  REAL(8) :: debt
+  INTEGER :: nliq, ngone   !** liquid dipoles present, dipoles removed on melting
   CHARACTER(len=64) :: outfn, inpfn
   
     
@@ -104,17 +112,13 @@ PROGRAM domain_melt4
   !** output initial file in melt file format (just in case)
            
   fliq = 0.0
+  nliq  = 0
+  ngone = 0
+  debt  = 0.0d0
   
   PRINT '(5A)', '       ', '      iter', '   liquid', '    fraction', '   target' 
   PRINT '(A,2I9,3G12.2)', 'output0:',  niter, 0, fliq, 0.0
-  IF (OUTPUT == 1) THEN
-     WRITE(outfn,'(''domain5_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
-     OPEN(OUTFID,file=outfn,status='unknown')
-     DO n = 1,NDIP
-        WRITE(OUTFID, '(6I9)') n, pos(n,1:3), domain(pos(n,1),pos(n,2),pos(n,3))
-     END DO
-     CLOSE(OUTFID)
-  END IF
+  IF (OUTPUT == 1) CALL write_frame()
             
 
 
@@ -138,6 +142,7 @@ PROGRAM domain_melt4
      !** MELTING BLOCK
      IF (movecnt == 0) THEN !** everything is pretty much done moving, we can melt again  .or. fliq > 0.0
         meltloop: DO n = 1,NDIP
+           IF (pos(n,1) < 0) CYCLE meltloop  !** dipole removed by mass conservation
            i = pos(n,1)
            j = pos(n,2)
            k = pos(n,3)
@@ -189,8 +194,17 @@ PROGRAM domain_melt4
               CALL RANDOM_NUMBER(rx)
               !** reduce rx to have a finer melt fraction resolution (i.e., get closer to target melt fractions)
               IF (rx <= 1.0d0) THEN    !** rx is used reduce the number of melt events per iteration
-                 !** 3. melt the current particle 
-                 domain(i,j,k) = -1  !** switch to melted 
+                 !** 3. melt the current particle (conserving mass, see rho_ratio)
+                 debt = debt + (1.0d0 - rho_ratio)
+                 IF (debt >= 1.0d0) THEN
+                    debt          = debt - 1.0d0
+                    domain(i,j,k) = 0   !** its volume is lost to the density change: leave a hole
+                    pos(n,1:3)    = -1  !** flag the dipole as removed
+                    ngone         = ngone + 1
+                 ELSE
+                    domain(i,j,k) = -1  !** switch to melted
+                    nliq          = nliq + 1
+                 END IF
                  ctype         = -1
                  meltcnt       = meltcnt + 1 !** only keep track of melting events
               END IF
@@ -208,6 +222,7 @@ PROGRAM domain_melt4
         movecnt = 0
         moveloop: DO n = 1,NDIP
            !** 4. determine movement ability
+           IF (pos(n,1) < 0) CYCLE moveloop  !** dipole removed by mass conservation
            i = pos(n,1)
            j = pos(n,2)
            k = pos(n,3)
@@ -324,37 +339,27 @@ PROGRAM domain_melt4
      END DO moveiterloop
      
      !** trigger output when specific melt criteria are met
-     fliq = DBLE(liqcnt)/DBLE(NDIP)    !** volume fraction of liquid water
+     !** melted mass fraction: every original ice dipole carries the same mass, whether it is now
+     !** a liquid dipole or was removed.  (Liquid volume fraction is nliq/(NDIP-ngone).)
+     fliq = DBLE(nliq + ngone)/DBLE(NDIP)
 
      !** 0.02 below is the tunable parameter to control how close it gets to the target output fraction
      IF (fliq > fliqold .AND. ANY(ABS(target_output_fractions(:) - fliq)/fliq < 0.02)) then
         nn = MINVAL(MINLOC((ABS(target_output_fractions(:) - fliq)/fliq)))
-        PRINT '(A,2I9,2G12.2)', 'output1:',  niter, liqcnt, fliq, target_output_fractions(nn)
-        target_output_fractions(nn) = -99 !** once we've outputted at a specific volume fraction, remove it from the list
+        PRINT '(A,2I9,2G12.2)', 'output1:',  niter, nliq, fliq, target_output_fractions(nn)
+        target_output_fractions(nn) = -99 !** once we've outputted at a specific melt fraction, remove it from the list
         fliqold = fliq      
-        IF (OUTPUT == 1) THEN
-           WRITE(outfn,'(''domain5_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
-           OPEN(OUTFID,file=outfn,status='unknown')
-           DO nn = 1,NDIP
-              WRITE(OUTFID, '(6I9)') nn, pos(nn,1:3), domain(pos(nn,1),pos(nn,2),pos(nn,3))
-           END DO
-           CLOSE(OUTFID)
-        END IF
+        IF (OUTPUT == 1) CALL write_frame()
      END IF
      
 
      !** final output
      IF (icecnt == 0 .AND. meltcnt == 0 .AND. movecnt == 0) THEN
-        fliq = DBLE(liqcnt)/DBLE(NDIP)    !** volume fraction of liquid water
-        PRINT '(A,2I9,2G12.2)', 'output2:',  niter, liqcnt, fliq, 1.0
-        IF (OUTPUT == 1) THEN
-           WRITE(outfn,'(''domain5_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
-           OPEN(OUTFID,file=outfn,status='unknown')
-           DO n = 1,NDIP
-              WRITE(OUTFID, '(6I9)') n, pos(n,1:3), domain(pos(n,1),pos(n,2),pos(n,3))
-           END DO
-           CLOSE(OUTFID)
-        END IF
+        fliq = DBLE(nliq + ngone)/DBLE(NDIP)    !** melted mass fraction
+        PRINT '(A,2I9,2G12.2)', 'output2:',  niter, nliq, fliq, 1.0
+        PRINT '(A,I9,A,I9,A,F8.5)', 'mass conservation: dipoles removed ', ngone, ' of ', NDIP, &
+             '  final/initial volume ', DBLE(NDIP - ngone)/DBLE(NDIP)
+        IF (OUTPUT == 1) CALL write_frame()
         
         EXIT iterloop !** bust out of iteration loop once all points melted
      END IF
@@ -362,6 +367,20 @@ PROGRAM domain_melt4
   END DO iterloop
   
 CONTAINS
+
+  !** write the current state: index, position, type (1 = ice, -1 = liquid) for every dipole still present
+  SUBROUTINE write_frame()
+    INTEGER :: nd, nout
+    WRITE(outfn,'(''domain5_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
+    OPEN(OUTFID,file=outfn,status='replace')
+    nout = 0
+    DO nd = 1,NDIP
+       IF (pos(nd,1) < 0) CYCLE  !** removed by mass conservation
+       nout = nout + 1
+       WRITE(OUTFID, '(6I9)') nout, pos(nd,1:3), domain(pos(nd,1),pos(nd,2),pos(nd,3))
+    END DO
+    CLOSE(OUTFID)
+  END SUBROUTINE write_frame
   
   INTEGER FUNCTION sgn(ns)
     INTEGER :: ns
