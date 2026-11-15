@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>SPMM Melting Steps</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one working surface. The 3-D particle is the page; frame controls sit under it,
+   the current frame's numbers beside it, and the whole-run composition strip below. */
+:root {
+  --bg: #f4f6f8; --panel: #ffffff; --stage: #e9edf1; --line: #d5dbe2;
+  --fg: #17212b; --fg2: #4b5a69; --fg3: #77879a;
+  --ice: #1f9aa8; --liq: #3b55d9; --frag: #cf6614; --removed: #b4bec9;
+  --focus: #17212b;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161b; --panel: #1a2027; --stage: #0c0f13; --line: #2c3540;
+    --fg: #e6ecf2; --fg2: #a9b6c4; --fg3: #7d8b9a;
+    --ice: #27a59f; --liq: #5f74f2; --frag: #c9722a; --removed: #4a5664;
+    --focus: #e6ecf2; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161b; --panel: #1a2027; --stage: #0c0f13; --line: #2c3540;
+  --fg: #e6ecf2; --fg2: #a9b6c4; --fg3: #7d8b9a;
+  --ice: #27a59f; --liq: #5f74f2; --frag: #c9722a; --removed: #4a5664;
+  --focus: #e6ecf2; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 24px; }
+header h1 { font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
+header p { margin: 0; color: var(--fg2); max-width: 70ch; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.viewer { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.openbar { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.openbar .status { font-size: 13px; color: var(--fg2); min-width: 0; overflow-wrap: anywhere; }
+.vh { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip-path: inset(50%); }
+.stage { position: relative; background: var(--stage); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  aspect-ratio: 5 / 4; max-width: 100%; }
+.stage.drop { border-color: var(--liq); border-style: dashed; }
+@media (max-width: 860px) { .stage { aspect-ratio: 1 / 1; } }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+.stage canvas:active { cursor: grabbing; }
+.stage .tag { position: absolute; left: 12px; top: 10px; right: 12px; font-family: var(--mono); font-size: 12px; color: var(--fg2); pointer-events: none; overflow-wrap: anywhere; }
+.stage .hint { position: absolute; right: 12px; bottom: 10px; font-size: 12px; color: var(--fg3); pointer-events: none; }
+.stage .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--fg2); }
+.framebar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.framebar input[type=range] { flex: 1 1 220px; min-width: 0; }
+.framebar .now { font-family: var(--mono); font-size: 13px; color: var(--fg2); min-width: 9ch; text-align: right; }
+button, .btn { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 6px 14px; cursor: pointer; display: inline-block; }
+button:hover, .btn:hover { border-color: var(--fg3); }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, summary:focus-visible, .btn:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+input[type=range] { accent-color: var(--liq); }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px 24px; }
+.ctl { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ctl label, .ctl .lab { font-size: 12px; color: var(--fg2); display: flex; justify-content: space-between; gap: 8px; }
+.ctl .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; min-height: 26px; }
+.ctl .row .chk { font-size: 14px; color: var(--fg); justify-content: flex-start; }
+.chk { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+.side { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.hero { display: flex; flex-direction: column; gap: 2px; }
+.hero .v { font-family: var(--mono); font-size: 44px; font-weight: 500; line-height: 1.05; letter-spacing: -0.02em; }
+.hero .k { font-size: 13px; color: var(--fg2); }
+dl.stats { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 0; border-top: 1px solid var(--line); }
+dl.stats dt, dl.stats dd { margin: 0; padding: 8px 0; border-bottom: 1px solid var(--line); }
+dl.stats dt { color: var(--fg2); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+dl.stats dd { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 14px; text-align: right; }
+.note { font-size: 13px; color: var(--fg2); margin: 0; }
+section h2 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+section > p { margin: 0 0 10px; color: var(--fg2); font-size: 13px; max-width: 80ch; }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--fg2); margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chartbox { position: relative; overflow-x: auto; }
+.chartbox svg { display: block; width: 100%; min-width: 600px; height: auto; }
+.chartbox text { font-family: var(--mono); font-size: 11px; fill: var(--fg3); }
+.chartbox .grid { stroke: var(--line); stroke-width: 1; }
+.chartbox .hit { fill: transparent; cursor: pointer; }
+.chartbox .sel { fill: none; stroke: var(--fg); stroke-width: 1.5; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px;
+  font-size: 12px; color: var(--fg); box-shadow: 0 4px 14px rgba(0,0,0,.14); white-space: nowrap; z-index: 2; }
+.tip b { font-family: var(--mono); font-weight: 500; }
+.tip div { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.tip div span { display: inline-flex; align-items: center; gap: 6px; color: var(--fg2); }
+details { border-top: 1px solid var(--line); padding-top: 12px; }
+summary { cursor: pointer; font-weight: 500; }
+details p { color: var(--fg2); font-size: 13px; max-width: 80ch; margin: 8px 0 0; }
+.tablebox { overflow-x: auto; margin-top: 10px; }
+table { border-collapse: collapse; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12.5px; min-width: 640px; width: 100%; }
+th, td { text-align: right; padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-family: var(--sans); font-weight: 500; color: var(--fg2); font-size: 12px; }
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--stage); }
+tbody tr.cur td { background: var(--stage); font-weight: 500; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>SPMM Melting Steps</h1>
+    <p><span id="hName"></span>: <span class="mono" id="hN0"></span> dipoles in the largest frame, <span id="hNf"></span> loaded. Open the frame files of any run, finished or not, to view it here. Drag to rotate, scroll to zoom, and cut into the particle to see where the liquid sits.</p>
+  </header>
+
+  <div class="main">
+    <div class="viewer">
+      <div class="openbar">
+        <label class="btn" for="files">Open frames…<input class="vh" id="files" type="file" multiple accept=".out,.dat,.txt,.json"></label>
+        <label class="btn" for="folder">Open folder…<input class="vh" id="folder" type="file" webkitdirectory multiple></label>
+        <button id="sample" type="button">Sample run</button>
+        <span class="status" id="status" role="status"></span>
+      </div>
+
+      <div class="stage" id="stage">
+        <canvas id="gl" aria-label="3-D view of the melting particle"></canvas>
+        <div class="tag" id="tag"></div>
+        <div class="hint">drag: rotate · wheel: zoom · drop files to open</div>
+        <div class="msg" id="msg" hidden></div>
+      </div>
+
+      <div class="framebar">
+        <button id="play" type="button">Play</button>
+        <input id="frame" type="range" min="0" max="0" step="1" value="0" aria-label="Melting step">
+        <span class="now" id="now"></span>
+      </div>
+
+      <div class="controls">
+        <div class="ctl">
+          <span class="lab">Show</span>
+          <div class="row">
+            <label class="chk"><input id="showIce" type="checkbox" checked><span class="sw" style="background:var(--ice)"></span>Ice</label>
+            <label class="chk"><input id="showLiq" type="checkbox" checked><span class="sw" style="background:var(--liq)"></span>Liquid</label>
+            <button id="reset" type="button">Reset view</button>
+          </div>
+        </div>
+        <div class="ctl">
+          <label for="cut"><span>Cut along x</span><span class="mono" id="cutv"></span></label>
+          <input id="cut" type="range" min="1" max="100" step="1" value="100">
+        </div>
+        <div class="ctl">
+          <label for="zoom"><span>Zoom</span><span class="mono" id="zoomv"></span></label>
+          <input id="zoom" type="range" min="60" max="400" step="5" value="100">
+        </div>
+        <div class="ctl">
+          <label for="alpha"><span>Liquid opacity</span><span class="mono" id="alphav">35%</span></label>
+          <input id="alpha" type="range" min="10" max="100" step="5" value="35">
+        </div>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="hero">
+        <span class="v" id="sMelt">–</span>
+        <span class="k">melted mass fraction</span>
+      </div>
+      <dl class="stats">
+        <dt><span class="sw" style="background:var(--ice)"></span>Ice dipoles</dt><dd id="sIce"></dd>
+        <dt><span class="sw" style="background:var(--liq)"></span>Liquid dipoles</dt><dd id="sLiq"></dd>
+        <dt><span class="sw" style="background:var(--removed)"></span>Removed dipoles</dt><dd id="sRem"></dd>
+        <dt>Volume vs. largest frame</dt><dd id="sVol"></dd>
+        <dt>Connected bodies</dt><dd id="sBod"></dd>
+        <dt><span class="sw" style="background:var(--frag)"></span>Detached dipoles</dt><dd id="sDet"></dd>
+        <dt>Axis ratios</dt><dd id="sAx"></dd>
+        <dt>Extent x × y × z</dt><dd id="sExt"></dd>
+      </dl>
+      <p class="note">Removed dipoles are counted against the largest frame loaded; <span class="mono">domain_melt5</span> removes them as ice turns to liquid so that mass is conserved. Axis ratios are the two shorter principal axes over the longest, from the second moments of the dipole positions. Detached dipoles are drawn in orange. Each dipole is drawn as a sphere holding 90% of its cell's volume, so neighbours do not quite touch.</p>
+    </aside>
+  </div>
+
+  <section>
+    <h2>Composition at each step</h2>
+    <p>Share of the largest frame's dipole count that is ice, liquid, or removed. Click a column to jump to that step.</p>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--ice)"></span>Ice</span>
+      <span><span class="sw" style="background:var(--liq)"></span>Liquid</span>
+      <span><span class="sw" style="background:var(--removed)"></span>Removed</span>
+    </div>
+    <div class="chartbox" id="chartbox"><svg id="chart" viewBox="0 0 760 240" role="img" aria-label="Stacked columns of ice, liquid and removed dipoles at each melting step"></svg><div class="tip" id="tip" hidden></div></div>
+  </section>
+
+  <details>
+    <summary>All steps as a table</summary>
+    <div class="tablebox"><table>
+      <thead><tr><th>Melted %</th><th>Ice</th><th>Liquid</th><th>Removed</th><th>Bodies</th><th>Detached</th><th>Axis ratios</th><th>Extent x × y × z</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+  </details>
+
+  <details>
+    <summary>What files can be opened</summary>
+    <p>Frame files as SPMM writes them: one dipole per line, either <span class="mono">index x y z type</span> with an optional body column, or <span class="mono">x y z type</span>. Type 1 is ice; −1 or 2 is liquid. Header lines are skipped, and an unfinished last line in a file that is still being written is ignored. Select as many frames as the run has produced so far; select them again later to pick up new ones.</p>
+    <p>The melted fraction comes from the six digits in a name like <span class="mono">domain5_f049477.out</span> (49.477%). For other names it is worked out as the share of the largest frame that is no longer ice, so include the earliest frame you have. Connected bodies are always recomputed here from the positions.</p>
+    <p>A packed <span class="mono">.json</span> set written by <span class="mono">pack_melt_frames.py</span> can be opened as well; it is a few hundred kilobytes instead of several megabytes per frame, which helps when the run lives on another machine. Files are read in this browser only and are not uploaded.</p>
+  </details>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script>
+const SAMPLE = null;   /* standalone copy: no built-in sample, open frame files instead */
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => n.toLocaleString('en-US');
+  const pct = (v, d) => v.toFixed(d === undefined ? 1 : d) + '%';
+  const BIAS = 32768;                 /* positions are stored as unsigned 16-bit, offset so negatives fit */
+  const MAXCELLS = 120e6;
+
+  let DS = null, F = [], N0 = 1, cache = [], gLo = [0, 0, 0], gHi = [1, 1, 1], busy = false;
+  const state = { i: 0, yaw: -0.55, pitch: 0.28, zoom: 1, cut: 1, ice: true, liq: true, playing: false, alpha: 0.35 };
+
+  /* ---------- decoding ---------- */
+  function b64bytes(s) {
+    const bin = atob(s), u = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k);
+    return u;
+  }
+  async function inflate(u) {
+    if (window.pako) return window.pako.inflate(u);
+    const ds = new DecompressionStream('deflate');
+    const buf = await new Response(new Blob([u]).stream().pipeThrough(ds)).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  /* Vertex layout, 12 bytes: position (y, z, x) u16 x3, type code u8, pad, normal i8 x3, pad.
+     g holds 0 empty, 1 ice, 2 liquid, 3 detached ice, 4 detached liquid; lo is the grid origin. */
+  function buildVerts(g, dims, lo) {
+    const NX = dims[0], NY = dims[1], NZ = dims[2];
+    let n = 0;
+    for (let k = 0; k < g.length; k++) if (g[k]) n++;
+    const buf = new ArrayBuffer(n * 12), u16 = new Uint16Array(buf), u8 = new Uint8Array(buf), sn = new Int8Array(buf);
+    const ox = lo[0] + BIAS, oy = lo[1] + BIAS, oz = lo[2] + BIAS;
+    let v = 0;
+    for (let x = 0; x < NX; x++) for (let y = 0; y < NY; y++) {
+      const base = (x * NY + y) * NZ;
+      for (let z = 0; z < NZ; z++) {
+        const c = g[base + z];
+        if (!c) continue;
+        let gx = 0, gy = 0, gz = 0;
+        for (let dx = -1; dx <= 1; dx++) {
+          const X = x + dx; if (X < 0 || X >= NX) continue;
+          for (let dy = -1; dy <= 1; dy++) {
+            const Y = y + dy; if (Y < 0 || Y >= NY) continue;
+            const b2 = (X * NY + Y) * NZ;
+            for (let dz = -1; dz <= 1; dz++) {
+              const Z = z + dz; if (Z < 0 || Z >= NZ) continue;
+              if (g[b2 + Z]) { gx += dx; gy += dy; gz += dz; }
+            }
+          }
+        }
+        const len = Math.sqrt(gx * gx + gy * gy + gz * gz), w = v * 6, b = v * 12;
+        u16[w] = y + oy; u16[w + 1] = z + oz; u16[w + 2] = x + ox; u8[b + 6] = c;
+        if (len > 0) {
+          const s = -127 / len;
+          sn[b + 8] = Math.round(gy * s); sn[b + 9] = Math.round(gz * s); sn[b + 10] = Math.round(gx * s);
+        }
+        v++;
+      }
+    }
+    return { buf: u8, n: n };
+  }
+  async function getFrame(i) {
+    if (!cache[i]) cache[i] = buildVerts(await inflate(b64bytes(F[i].z)), DS.dims, DS.lo);
+    return cache[i];
+  }
+
+  /* ---------- reading raw frame files ---------- */
+  /* Returns x, y, z, type for every complete numeric line. Lines with 4 integers are x y z type;
+     lines with 5 or more are index x y z type [...]. Anything else (headers) is skipped. */
+  function parseFrame(u) {
+    let cap = 1 << 16, out = new Int32Array(cap * 4), n = 0;
+    const vals = [0, 0, 0, 0, 0, 0];
+    let cnt = 0, bad = false, cur = 0, sign = 1, inNum = false, prevCnt = -1;
+    const push = (endsWithNewline) => {
+      if (inNum) { if (cnt < 6) vals[cnt] = sign * cur; cnt++; inNum = false; }
+      if (!bad && cnt >= 4 && (endsWithNewline || cnt === prevCnt)) {
+        if (n === cap) { cap *= 2; const o2 = new Int32Array(cap * 4); o2.set(out); out = o2; }
+        const o = cnt === 4 ? 0 : 1, k = n * 4;
+        out[k] = vals[o]; out[k + 1] = vals[o + 1]; out[k + 2] = vals[o + 2]; out[k + 3] = vals[o + 3];
+        n++; prevCnt = cnt;
+      }
+      cnt = 0; bad = false; cur = 0; sign = 1;
+    };
+    for (let i = 0; i < u.length; i++) {
+      const c = u[i];
+      if (c >= 48 && c <= 57) { if (!inNum) { inNum = true; cur = 0; } cur = cur * 10 + (c - 48); }
+      else if (c === 10) push(true);
+      else if (c === 32 || c === 9 || c === 13 || c === 44) { if (inNum) { if (cnt < 6) vals[cnt] = sign * cur; cnt++; inNum = false; sign = 1; } }
+      else if (c === 45 && !inNum) sign = -1;
+      else if (c === 43 && !inNum) sign = 1;
+      else bad = true;
+    }
+    if (inNum || cnt > 0) push(false);
+    return { p: out, n: n };
+  }
+  function eigRatios(a11, a22, a33, a12, a13, a23) {
+    const p1 = a12 * a12 + a13 * a13 + a23 * a23, q = (a11 + a22 + a33) / 3;
+    let e;
+    if (p1 < 1e-12) e = [a11, a22, a33].sort((a, b) => b - a);
+    else {
+      const p2 = (a11 - q) * (a11 - q) + (a22 - q) * (a22 - q) + (a33 - q) * (a33 - q) + 2 * p1, p = Math.sqrt(p2 / 6);
+      const b11 = (a11 - q) / p, b22 = (a22 - q) / p, b33 = (a33 - q) / p, b12 = a12 / p, b13 = a13 / p, b23 = a23 / p;
+      const det = b11 * (b22 * b33 - b23 * b23) - b12 * (b12 * b33 - b23 * b13) + b13 * (b12 * b23 - b22 * b13);
+      const phi = Math.acos(Math.max(-1, Math.min(1, det / 2))) / 3;
+      const e1 = q + 2 * p * Math.cos(phi), e3 = q + 2 * p * Math.cos(phi + 2 * Math.PI / 3);
+      e = [e1, 3 * q - e1 - e3, e3];
+    }
+    if (!(e[0] > 0)) return [1, 1];
+    return [Math.sqrt(Math.max(0, e[2]) / e[0]), Math.sqrt(Math.max(0, e[1]) / e[0])];
+  }
+  /* One frame: rasterise, label connected bodies (26 neighbours, ice and liquid together), measure, build vertices. */
+  function frameFromPoints(P) {
+    const p = P.p, n = P.n, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let k = 0; k < n; k++) for (let a = 0; a < 3; a++) { const v = p[k * 4 + a]; if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v; }
+    if (lo[0] < -BIAS || hi[0] >= BIAS || lo[1] < -BIAS || hi[1] >= BIAS || lo[2] < -BIAS || hi[2] >= BIAS) throw new Error('coordinates are outside ±32768');
+    const NX = hi[0] - lo[0] + 1, NY = hi[1] - lo[1] + 1, NZ = hi[2] - lo[2] + 1;
+    if (NX * NY * NZ > MAXCELLS) throw new Error('the bounding box (' + NX + ' × ' + NY + ' × ' + NZ + ' cells) is too large to view');
+    const g = new Uint8Array(NX * NY * NZ), lin = new Int32Array(n);
+    for (let k = 0; k < n; k++) {
+      const l = ((p[k * 4] - lo[0]) * NY + (p[k * 4 + 1] - lo[1])) * NZ + (p[k * 4 + 2] - lo[2]), t = p[k * 4 + 3];
+      lin[k] = l; g[l] = (t === -1 || t === 2) ? 2 : 1;
+    }
+    const order = new Int32Array(n), starts = [];
+    let tail = 0;
+    for (let k = 0; k < n; k++) {
+      const s = lin[k];
+      if (g[s] & 8) continue;
+      let head = tail; starts.push(tail); g[s] |= 8; order[tail++] = s;
+      while (head < tail) {
+        const c = order[head++], z = c % NZ, r = (c - z) / NZ, y = r % NY, x = (r - y) / NY;
+        for (let dx = -1; dx <= 1; dx++) {
+          const X = x + dx; if (X < 0 || X >= NX) continue;
+          for (let dy = -1; dy <= 1; dy++) {
+            const Y = y + dy; if (Y < 0 || Y >= NY) continue;
+            const b2 = (X * NY + Y) * NZ;
+            for (let dz = -1; dz <= 1; dz++) {
+              const Z = z + dz; if (Z < 0 || Z >= NZ) continue;
+              const q = b2 + Z, gv = g[q];
+              if (gv && !(gv & 8)) { g[q] = gv | 8; order[tail++] = q; }
+            }
+          }
+        }
+      }
+    }
+    starts.push(tail);
+    let big = 0;
+    for (let b = 1; b < starts.length - 1; b++) if (starts[b + 1] - starts[b] > starts[big + 1] - starts[big]) big = b;
+    let ice = 0, liq = 0, sx = 0, sy = 0, sz = 0, sxx = 0, syy = 0, szz = 0, sxy = 0, sxz = 0, syz = 0;
+    for (let b = 0; b < starts.length - 1; b++) for (let j = starts[b]; j < starts[b + 1]; j++) {
+      const c = order[j], code = g[c] & 7;
+      if (code === 2) liq++; else ice++;
+      g[c] = b === big ? code : code + 2;
+      const z = c % NZ, r = (c - z) / NZ, y = r % NY, x = (r - y) / NY;
+      sx += x; sy += y; sz += z; sxx += x * x; syy += y * y; szz += z * z; sxy += x * y; sxz += x * z; syz += y * z;
+    }
+    const m = tail, mx = sx / m, my = sy / m, mz = sz / m;
+    const ax = eigRatios(sxx / m - mx * mx, syy / m - my * my, szz / m - mz * mz, sxy / m - mx * my, sxz / m - mx * mz, syz / m - my * mz);
+    return { ice: ice, liq: liq, bodies: starts.length - 1, detached: m - (starts[big + 1] - starts[big]),
+      ax: ax, ext: [NX, NY, NZ], lo: lo, hi: hi, verts: buildVerts(g, [NX, NY, NZ], lo) };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  function status(text) { $('status').textContent = text; }
+  function setBusy(b) { busy = b; $('sample').disabled = b; $('files').disabled = b; $('folder').disabled = b; }
+
+  function checkPacked(d) {
+    if (!d || !Array.isArray(d.dims) || !Array.isArray(d.lo) || !Array.isArray(d.frames) || !d.frames.length || !(d.n0 > 0)) throw new Error('not a packed melting set');
+    d.frames.forEach((f) => { if (typeof f.z !== 'string' || !Array.isArray(f.ax) || !Array.isArray(f.ext)) throw new Error('not a packed melting set'); });
+    if (d.dims[0] * d.dims[1] * d.dims[2] > MAXCELLS) throw new Error('the grid is too large to view');
+    return d;
+  }
+  function usePacked(d, name, start) {
+    useDataset({ name: name, frames: d.frames, n0: d.n0, dims: d.dims, lo: d.lo,
+      hi: [d.lo[0] + d.dims[0] - 1, d.lo[1] + d.dims[1] - 1, d.lo[2] + d.dims[2] - 1] }, start);
+  }
+  async function openFiles(list, fromFolder) {
+    if (busy) return;
+    let files = Array.from(list || []);
+    if (!files.length) return;
+    setBusy(true);
+    try {
+      const json = files.filter((f) => /\.json$/i.test(f.name));
+      if (json.length) {
+        status('Reading ' + json[0].name + '…');
+        const d = checkPacked(JSON.parse(await json[0].text()));
+        usePacked(d, json[0].name, d.frames.length - 1);
+        status('Opened ' + json[0].name + ': ' + d.frames.length + ' frames.');
+        return;
+      }
+      if (fromFolder) {
+        const outs = files.filter((f) => /\.out$/i.test(f.name)), framed = outs.filter((f) => /_f\d+\.out$/i.test(f.name));
+        files = framed.length ? framed : outs;
+        if (!files.length) throw new Error('that folder has no .out frame files');
+      }
+      files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const frames = [], skipped = [];
+      for (let k = 0; k < files.length; k++) {
+        status('Reading ' + (k + 1) + ' of ' + files.length + ': ' + files[k].name);
+        await tick();
+        const P = parseFrame(new Uint8Array(await files[k].arrayBuffer()));
+        if (!P.n) { skipped.push(files[k].name); continue; }
+        let fr;
+        try { fr = frameFromPoints(P); } catch (e) { throw new Error(files[k].name + ': ' + e.message); }
+        fr.name = files[k].name;
+        frames.push(fr);
+      }
+      if (!frames.length) throw new Error('none of the selected files held dipole lines');
+      let n0 = 0;
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      frames.forEach((f) => {
+        n0 = Math.max(n0, f.ice + f.liq);
+        for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], f.lo[a]); hi[a] = Math.max(hi[a], f.hi[a]); }
+      });
+      frames.forEach((f) => {
+        const m = /f(\d{6})\.out$/i.exec(f.name);
+        f.label = m ? +m[1] / 1000 : 100 * (n0 - f.ice) / n0;
+        f.removed = n0 - f.ice - f.liq;
+      });
+      frames.sort((a, b) => a.label - b.label);
+      const name = frames.length === 1 ? frames[0].name : frames[0].name + ' … ' + frames[frames.length - 1].name;
+      useDataset({ name: name, frames: frames, n0: n0, lo: lo, hi: hi }, frames.length - 1);
+      status('Opened ' + frames.length + (frames.length === 1 ? ' frame' : ' frames') +
+        (skipped.length ? '; skipped ' + skipped.length + ' with no dipole lines (' + skipped.slice(0, 3).join(', ') + (skipped.length > 3 ? ', …' : '') + ')' : '') + '.');
+    } catch (e) {
+      status('Could not open: ' + e.message + '.');
+    } finally {
+      setBusy(false);
+      $('files').value = ''; $('folder').value = '';
+    }
+  }
+  function useSample() {
+    let start = 0;
+    for (let k = 0; k < SAMPLE.frames.length; k++) if (Math.abs(SAMPLE.frames[k].label - 30) < Math.abs(SAMPLE.frames[start].label - 30)) start = k;
+    usePacked(SAMPLE, 'Sample run of domain_melt5 on one aggregate', start);
+    status('');
+  }
+  function useDataset(ds, start) {
+    stop();
+    DS = ds; F = ds.frames; N0 = ds.n0; gLo = ds.lo; gHi = ds.hi;
+    cache = F.map((f) => f.verts || null);
+    $('hName').textContent = ds.name;
+    $('hN0').textContent = fmt(N0);
+    $('hNf').textContent = F.length + (F.length === 1 ? ' frame' : ' frames');
+    $('frame').max = F.length - 1;
+    const nx = gHi[0] - gLo[0] + 1;
+    $('cut').max = nx; $('cut').value = nx; state.cut = nx; syncCut();
+    $('msg').hidden = true;
+    buildChart(); buildTable();
+    setFrame(Math.max(0, Math.min(F.length - 1, start)));
+  }
+
+  /* ---------- WebGL ---------- */
+  const canvas = $('gl');
+  const gl = canvas.getContext('webgl', { antialias: false, alpha: true, premultipliedAlpha: true });
+  let prog = null, vbuf = null, U = {}, nPts = 0, dirty = false;
+  const VS = [
+    'attribute vec3 aPos; attribute float aCode; attribute vec3 aN;',
+    'uniform mat3 uRot; uniform vec3 uCenter; uniform vec2 uScale; uniform float uZ; uniform float uPt; uniform float uCut;',
+    'uniform vec3 uIce; uniform vec3 uLiq; uniform vec3 uFrag; uniform vec2 uShow;',
+    'varying vec3 vCol;',
+    'void main() {',
+    '  bool liquid = (aCode > 1.5 && aCode < 2.5) || aCode > 3.5;',
+    '  bool frag = aCode > 2.5;',
+    '  float vis = liquid ? uShow.y : uShow.x;',
+    '  if (aPos.z > uCut - 0.5 || vis < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 1.0; vCol = vec3(0.0); return; }',
+    '  vec3 p = uRot * (aPos - uCenter);',
+    '  vec3 n = dot(aN, aN) < 0.01 ? vec3(0.0, 0.0, 1.0) : normalize(aN);',
+    '  n = uRot * n;',
+    '  float d = max(dot(n, normalize(vec3(0.35, 0.6, 0.72))), 0.0);',
+    '  vec3 base = frag ? uFrag : (liquid ? uLiq : uIce);',
+    '  vCol = mix(base * 0.5, mix(base, vec3(1.0), 0.3), d);',
+    '  gl_Position = vec4(p.x * uScale.x, p.y * uScale.y, -p.z * uZ, 1.0);',
+    '  gl_PointSize = frag ? uPt * 2.0 : uPt;',
+    '}'].join('\n');
+  const FS = 'precision mediump float; varying vec3 vCol; uniform float uAlpha; void main() { vec2 c = gl_PointCoord * 2.0 - 1.0; float r2 = dot(c, c); if (r2 > 1.0) discard; vec3 n = vec3(c.x, -c.y, sqrt(1.0 - r2)); float d = max(dot(n, normalize(vec3(0.35, 0.6, 0.72))), 0.0); gl_FragColor = vec4(vCol * (0.55 + 0.6 * d), uAlpha); }';
+
+  function fail(text) { const m = $('msg'); m.textContent = text; m.hidden = false; }
+  function initGL() {
+    if (!gl) { fail('This browser could not start WebGL, so the 3-D view is unavailable. The chart and table below still work.'); return false; }
+    const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    try {
+      prog = gl.createProgram();
+      gl.attachShader(prog, mk(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    } catch (e) { prog = null; fail('The 3-D view could not be set up (' + e.message + ').'); return false; }
+    gl.useProgram(prog);
+    ['uRot', 'uCenter', 'uScale', 'uZ', 'uPt', 'uCut', 'uIce', 'uLiq', 'uFrag', 'uShow', 'uAlpha'].forEach((u) => { U[u] = gl.getUniformLocation(prog, u); });
+    vbuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+    const aPos = gl.getAttribLocation(prog, 'aPos'), aCode = gl.getAttribLocation(prog, 'aCode'), aN = gl.getAttribLocation(prog, 'aN');
+    gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.UNSIGNED_SHORT, false, 12, 0);
+    gl.enableVertexAttribArray(aCode); gl.vertexAttribPointer(aCode, 1, gl.UNSIGNED_BYTE, false, 12, 6);
+    gl.enableVertexAttribArray(aN); gl.vertexAttribPointer(aN, 3, gl.BYTE, true, 12, 8);
+    gl.enable(gl.DEPTH_TEST);
+    gl.clearColor(0, 0, 0, 0);
+    return true;
+  }
+  function cssRGB(name) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const m = /^#([0-9a-f]{6})$/i.exec(v);
+    if (!m) return [0.5, 0.5, 0.5];
+    const h = parseInt(m[1], 16);
+    return [(h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h & 255) / 255];
+  }
+  function draw() {
+    dirty = false;
+    if (!prog) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    gl.viewport(0, 0, w, h);
+    gl.disable(gl.BLEND); gl.depthMask(true); gl.colorMask(true, true, true, true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (!nPts) return;
+    const ex = gHi[0] - gLo[0] + 1, ey = gHi[1] - gLo[1] + 1, ez = gHi[2] - gLo[2] + 1, diag = Math.sqrt(ex * ex + ey * ey + ez * ez);
+    const m = Math.min(w, h), s = state.zoom / (0.44 * diag);   /* the set's bounding box just fits at zoom 1 */
+    const cy = Math.cos(state.yaw), sy = Math.sin(state.yaw), cp = Math.cos(state.pitch), sp = Math.sin(state.pitch);
+    gl.uniformMatrix3fv(U.uRot, false, [cy, sp * sy, -cp * sy, 0, cp, sp, sy, -sp * cy, cp * cy]);
+    gl.uniform3f(U.uCenter, (gLo[1] + gHi[1]) / 2 + BIAS, (gLo[2] + gHi[2]) / 2 + BIAS, (gLo[0] + gHi[0]) / 2 + BIAS);
+    gl.uniform2f(U.uScale, s * m / w, s * m / h);
+    gl.uniform1f(U.uZ, 1 / (0.85 * diag));
+    gl.uniform1f(U.uPt, Math.max(1.0, s * m / 2 * 0.965));   /* sphere with 90% of the cell volume: diameter 0.9^(1/3) of the spacing */
+    gl.uniform1f(U.uCut, gLo[0] + BIAS + state.cut);
+    gl.uniform3fv(U.uIce, cssRGB('--ice')); gl.uniform3fv(U.uLiq, cssRGB('--liq')); gl.uniform3fv(U.uFrag, cssRGB('--frag'));
+    /* pass 1: ice, opaque */
+    gl.depthFunc(gl.LESS);
+    if (state.ice) { gl.uniform2f(U.uShow, 1, 0); gl.uniform1f(U.uAlpha, 1); gl.drawArrays(gl.POINTS, 0, nPts); }
+    if (state.liq) {
+      /* pass 2: liquid depth only, so that just the nearest liquid layer is tinted */
+      gl.uniform2f(U.uShow, 0, 1); gl.uniform1f(U.uAlpha, 1);
+      gl.colorMask(false, false, false, false); gl.drawArrays(gl.POINTS, 0, nPts);
+      /* pass 3: that nearest liquid layer, blended over whatever lies behind it */
+      gl.colorMask(true, true, true, true); gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
+      gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.uniform1f(U.uAlpha, state.alpha); gl.drawArrays(gl.POINTS, 0, nPts);
+      gl.disable(gl.BLEND); gl.depthMask(true); gl.depthFunc(gl.LESS);
+    }
+  }
+  function requestDraw() { if (!dirty) { dirty = true; requestAnimationFrame(draw); } }
+
+  /* ---------- frame selection ---------- */
+  let token = 0;
+  async function setFrame(i) {
+    if (!F.length) return;
+    state.i = i;
+    $('frame').value = i;
+    updateStats(); updateChartSel();
+    if (!prog) return;
+    const t = ++token;
+    let fr;
+    try { fr = await getFrame(i); } catch (e) { fail('Step ' + (i + 1) + ' could not be decoded.'); return; }
+    if (t !== token) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+    gl.bufferData(gl.ARRAY_BUFFER, fr.buf, gl.DYNAMIC_DRAW);
+    nPts = fr.n;
+    requestDraw();
+  }
+  function axText(f) { return f.ax[0].toFixed(2) + ' : ' + f.ax[1].toFixed(2) + ' : 1'; }
+  function updateStats() {
+    const f = F[state.i];
+    $('sMelt').textContent = pct(f.label, 1);
+    $('sIce').textContent = fmt(f.ice);
+    $('sLiq').textContent = fmt(f.liq);
+    $('sRem').textContent = fmt(f.removed);
+    $('sVol').textContent = pct(100 * (f.ice + f.liq) / N0, 1);
+    $('sBod').textContent = fmt(f.bodies);
+    $('sDet').textContent = fmt(f.detached);
+    $('sAx').textContent = axText(f);
+    $('sExt').textContent = f.ext.join(' × ');
+    $('now').textContent = (state.i + 1) + ' / ' + F.length;
+    $('tag').textContent = 'step ' + (state.i + 1) + ' · ' + pct(f.label, 1) + ' melted' + (f.name ? ' · ' + f.name : '');
+    const rows = $('tbody').children;
+    for (let k = 0; k < rows.length; k++) rows[k].classList.toggle('cur', k === state.i);
+  }
+
+  /* ---------- chart ---------- */
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const CH = { W: 760, H: 240, l: 46, r: 10, t: 10, b: 34 };
+  let selRect = null;
+  function el(name, attrs) { const e = document.createElementNS(SVGNS, name); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+  function barGeom() { const pw = CH.W - CH.l - CH.r, band = pw / F.length; return { pw: pw, band: band, bw: Math.max(1, Math.min(26, band * 0.64)) }; }
+  function buildChart() {
+    const svg = $('chart'), G = barGeom(), ph = CH.H - CH.t - CH.b, band = G.band, bw = G.bw;
+    svg.textContent = '';
+    const y = (v) => CH.t + ph * (1 - v), gap = band >= 6 ? 2 : 0, every = Math.max(1, Math.ceil(34 / band));
+    [0, 0.25, 0.5, 0.75, 1].forEach((v) => {
+      svg.appendChild(el('line', { class: 'grid', x1: CH.l, x2: CH.W - CH.r, y1: y(v), y2: y(v) }));
+      const t = el('text', { x: CH.l - 8, y: y(v) + 4, 'text-anchor': 'end' }); t.textContent = Math.round(v * 100) + '%'; svg.appendChild(t);
+    });
+    F.forEach((f, k) => {
+      const cx = CH.l + band * (k + 0.5), x = cx - bw / 2;
+      const a = f.ice / N0, b = f.liq / N0, c = Math.max(0, f.removed) / N0;
+      const seg = (v0, v1, color) => { const hh = y(v0) - y(v1) - gap; if (hh > 0.5) svg.appendChild(el('rect', { x: x, y: y(v1) + gap, width: bw, height: hh, fill: 'var(' + color + ')' })); };
+      seg(0, a, '--ice'); seg(a, a + b, '--liq'); seg(a + b, a + b + c, '--removed');
+      if (k % every === 0) { const t = el('text', { x: cx, y: CH.H - CH.b + 16, 'text-anchor': 'middle' }); t.textContent = Math.round(f.label); svg.appendChild(t); }
+      const hit = el('rect', { class: 'hit', x: CH.l + band * k, y: CH.t, width: band, height: ph + 22 });
+      hit.addEventListener('click', () => { stop(); setFrame(k); });
+      hit.addEventListener('pointermove', (ev) => showTip(k, ev));
+      hit.addEventListener('pointerleave', () => { $('tip').hidden = true; });
+      svg.appendChild(hit);
+    });
+    const xt = el('text', { x: CH.l + G.pw / 2, y: CH.H - 2, 'text-anchor': 'middle' }); xt.textContent = 'melted mass fraction, %'; svg.appendChild(xt);
+    selRect = el('rect', { class: 'sel', y: CH.t - 3, width: bw + 8, height: ph + 6, rx: 3, 'pointer-events': 'none' });
+    svg.appendChild(selRect);
+  }
+  function updateChartSel() {
+    if (!selRect) return;
+    const G = barGeom();
+    selRect.setAttribute('x', CH.l + G.band * (state.i + 0.5) - G.bw / 2 - 4);
+  }
+  function showTip(k, ev) {
+    const f = F[k], tip = $('tip'), box = $('chartbox');
+    tip.textContent = '';
+    const row = (color, name, value) => {
+      const d = document.createElement('div'), s = document.createElement('span'), b = document.createElement('b');
+      if (color) { const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = 'var(' + color + ')'; s.appendChild(sw); }
+      s.appendChild(document.createTextNode(name)); b.textContent = value; d.appendChild(s); d.appendChild(b); tip.appendChild(d);
+    };
+    const share = (n) => fmt(n) + ' · ' + pct(100 * n / N0, 1);
+    row('', 'Step ' + (k + 1), pct(f.label, 1) + ' melted');
+    row('--ice', 'Ice', share(f.ice)); row('--liq', 'Liquid', share(f.liq)); row('--removed', 'Removed', share(f.removed));
+    tip.hidden = false;
+    const r = box.getBoundingClientRect();
+    let x = ev.clientX - r.left + box.scrollLeft + 14;
+    const maxX = box.scrollLeft + box.clientWidth - tip.offsetWidth - 4;
+    if (x > maxX) x = Math.max(box.scrollLeft + 4, ev.clientX - r.left + box.scrollLeft - tip.offsetWidth - 14);
+    tip.style.left = x + 'px';
+    tip.style.top = Math.max(4, ev.clientY - r.top - tip.offsetHeight - 8) + 'px';
+  }
+  function buildTable() {
+    const tb = $('tbody');
+    tb.textContent = '';
+    F.forEach((f, k) => {
+      const tr = document.createElement('tr');
+      [f.label.toFixed(2), fmt(f.ice), fmt(f.liq), fmt(f.removed), fmt(f.bodies), fmt(f.detached), axText(f), f.ext.join(' × ')].forEach((v) => {
+        const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+      });
+      tr.addEventListener('click', () => { stop(); setFrame(k); });
+      tb.appendChild(tr);
+    });
+  }
+
+  /* ---------- controls ---------- */
+  let timer = null;
+  function stop() { state.playing = false; if (timer) { clearInterval(timer); timer = null; } $('play').textContent = 'Play'; }
+  $('play').addEventListener('click', () => {
+    if (state.playing) { stop(); return; }
+    if (F.length < 2) return;
+    state.playing = true; $('play').textContent = 'Pause';
+    if (state.i >= F.length - 1) setFrame(0);
+    timer = setInterval(() => { if (state.i >= F.length - 1) { stop(); return; } setFrame(state.i + 1); }, 650);
+  });
+  $('frame').addEventListener('input', (e) => { stop(); setFrame(+e.target.value); });
+  function syncCut() { const nx = gHi[0] - gLo[0] + 1; $('cutv').textContent = state.cut >= nx ? 'whole particle' : 'slices 1–' + state.cut + ' of ' + nx; }
+  $('cut').addEventListener('input', (e) => { state.cut = +e.target.value; syncCut(); requestDraw(); });
+  function syncZoom() { $('zoom').value = Math.round(state.zoom * 100); $('zoomv').textContent = Math.round(state.zoom * 100) + '%'; }
+  $('zoom').addEventListener('input', (e) => { state.zoom = +e.target.value / 100; syncZoom(); requestDraw(); });
+  $('showIce').addEventListener('change', (e) => { state.ice = e.target.checked; requestDraw(); });
+  $('showLiq').addEventListener('change', (e) => { state.liq = e.target.checked; requestDraw(); });
+  $('alpha').addEventListener('input', (e) => { state.alpha = +e.target.value / 100; $('alphav').textContent = e.target.value + '%'; requestDraw(); });
+  $('reset').addEventListener('click', () => {
+    state.yaw = -0.55; state.pitch = 0.28; state.zoom = 1; state.cut = gHi[0] - gLo[0] + 1;
+    $('cut').value = state.cut; syncCut(); syncZoom(); requestDraw();
+  });
+  $('files').addEventListener('change', (e) => openFiles(e.target.files, false));
+  $('folder').addEventListener('change', (e) => openFiles(e.target.files, true));
+  $('sample').addEventListener('click', () => { if (!busy) useSample(); });
+  const stage = $('stage');
+  stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.add('drop'); });
+  stage.addEventListener('dragleave', () => stage.classList.remove('drop'));
+  stage.addEventListener('drop', (e) => { e.preventDefault(); stage.classList.remove('drop'); if (e.dataTransfer) openFiles(e.dataTransfer.files, false); });
+
+  let drag = null;
+  canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY }; try { canvas.setPointerCapture(e.pointerId); } catch (err) {} });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    state.yaw += (e.clientX - drag.x) * 0.01;
+    state.pitch = Math.max(-1.55, Math.min(1.55, state.pitch + (e.clientY - drag.y) * 0.01));
+    drag.x = e.clientX; drag.y = e.clientY; requestDraw();
+  });
+  const endDrag = () => { drag = null; };
+  canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    state.zoom = Math.max(0.6, Math.min(4, state.zoom * Math.exp(-e.deltaY * 0.0015)));
+    syncZoom(); requestDraw();
+  }, { passive: false });
+
+  if (window.ResizeObserver) new ResizeObserver(requestDraw).observe(canvas); else window.addEventListener('resize', requestDraw);
+  if (window.matchMedia) { const mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', requestDraw); }
+  new MutationObserver(requestDraw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  /* ---------- start ---------- */
+  syncZoom();
+  initGL();
+  if (SAMPLE) useSample();
+  else {
+    $('sample').hidden = true; $('hName').textContent = 'No set open'; $('hN0').textContent = '0'; $('hNf').textContent = '0 frames';
+    status('Open a set of frame files to begin.');
+  }
+})();
+</script>
+</body>
+</html>
