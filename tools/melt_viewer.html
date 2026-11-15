@@ -175,7 +175,7 @@ tbody tr.cur td { background: var(--stage); font-weight: 500; }
         <dt>Axis ratios</dt><dd id="sAx"></dd>
         <dt>Extent x × y × z</dt><dd id="sExt"></dd>
       </dl>
-      <p class="note">Removed dipoles are counted against the largest frame loaded; <span class="mono">domain_melt5</span> removes them as ice turns to liquid so that mass is conserved. Axis ratios are the two shorter principal axes over the longest, from the second moments of the dipole positions. Detached dipoles are drawn in orange. Each dipole is drawn as a sphere holding 90% of its cell's volume, so neighbours do not quite touch.</p>
+      <p class="note">Removed dipoles are counted against the largest frame loaded; <span class="mono">spmm</span> removes them as ice turns to liquid so that mass is conserved. Axis ratios are the two shorter principal axes over the longest, from the second moments of the dipole positions. Detached dipoles are drawn in orange. Each dipole is drawn as a sphere holding 90% of its cell's volume, so neighbours do not quite touch.</p>
     </aside>
   </div>
 
@@ -440,7 +440,7 @@ const SAMPLE = null;   /* standalone copy: no built-in sample, open frame files 
   function useSample() {
     let start = 0;
     for (let k = 0; k < SAMPLE.frames.length; k++) if (Math.abs(SAMPLE.frames[k].label - 30) < Math.abs(SAMPLE.frames[start].label - 30)) start = k;
-    usePacked(SAMPLE, 'Sample run of domain_melt5 on one aggregate', start);
+    usePacked(SAMPLE, 'Sample run of spmm on one aggregate', start);
     status('');
   }
   function useDataset(ds, start) {

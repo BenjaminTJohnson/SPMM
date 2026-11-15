@@ -8,7 +8,7 @@
 !**
 !** The melt rule is the one in domain_melt5.f90 (26-neighbour ice count threshold).
 !** Input: shape file with nheader header lines, then rows "i j k m"; m == 2 marks water, else ice.
-program spmm_bond
+program spmm_main    !** (the name spmm is taken by the namelist group)
   implicit none
   integer, parameter :: dp = kind(1.0d0), i1 = selected_int_kind(2)
 
@@ -18,7 +18,7 @@ program spmm_bond
   real(dp) :: p_melt = 1.0_dp, move_frac = 0.2_dp, dfmax = 0.005_dp, temp = 0.0_dp, temp_final = -1.0_dp
   !** frames are written at the melted fractions in targets (ascending).  Each melt step melts just
   !** enough to reach the next target, at most dfmax of the particle (dfmax_late from f_late onwards).
-  !** These can also be set in group &melt of spmm.nml, which spmm reads too.
+  !** These can also be set in group &melt of spmm.nml, which the legacy program reads too.
   integer, parameter :: maxtarg = 100
   real(dp) :: targets(maxtarg) = -1.0_dp, dfmax_late = 0.02_dp, f_late = 0.20_dp, nextt
   integer  :: ntarg, need, left
@@ -792,4 +792,4 @@ contains
     close(17)
   end subroutine output_name
 
-end program spmm_bond
+end program spmm_main

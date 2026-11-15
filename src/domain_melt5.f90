@@ -1,4 +1,6 @@
 
+!** DEPRECATED: the earlier centre-of-mass movement rule, superseded by spmm.f90.  Built only with
+!** -DSPMM_BUILD_LEGACY=ON, as spmm_legacy.
 !** domain based melting model (rather than sparse)
 !** update: read in any melting file step, and start from there.
 PROGRAM domain_melt4

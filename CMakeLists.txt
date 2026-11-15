@@ -6,6 +6,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(SPMM_NATIVE "Tune for the build host CPU (binary may not run on other nodes)" OFF)
+option(SPMM_BUILD_LEGACY "Also build the deprecated program spmm_legacy (src/domain_melt5.f90)" OFF)
 
 set(id ${CMAKE_Fortran_COMPILER_ID})
 if(id STREQUAL "GNU")

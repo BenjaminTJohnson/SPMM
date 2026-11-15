@@ -6,3 +6,4 @@ example/
 __pycache__/
 /spmm
 /spmm_bond
+/spmm_legacy

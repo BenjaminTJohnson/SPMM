@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run spmm_bond (or spmm) in a run folder and pack its frames for the melting-steps viewer.
+"""Run spmm in a run folder and pack its frames for the melting-steps viewer.
 
 usage: run_packed.py [--live] [--dir RUN_DIR] [--exe PATH] [--out NAME.json] [--clean]
 
@@ -10,7 +10,7 @@ into one JSON file (default packed.json in the run folder) with pack_melt_frames
   --live    also repack each time a new frame has been written, so the JSON can be opened
             (and reopened) in the viewer while the run is going.  Each repack rebuilds the
             whole file, which takes up to a minute for a large particle.
-  --exe     program to run; default is build/src/spmm_bond next to this repository's scripts.
+  --exe     program to run; default is build/src/spmm next to this repository's scripts.
   --clean   delete frame files already in the run folder first.  Without it the script
             stops if any are there, so an old run is never mixed into the new one.
 
@@ -53,7 +53,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--live", action="store_true", help="repack whenever a new frame has been written")
     ap.add_argument("--dir", default=".", help="run folder (default: current folder)")
-    ap.add_argument("--exe", default=os.path.join(HERE, "..", "build", "src", "spmm_bond"))
+    ap.add_argument("--exe", default=os.path.join(HERE, "..", "build", "src", "spmm"))
     ap.add_argument("--out", default="packed.json", help="packed file name, inside the run folder unless a path is given")
     ap.add_argument("--clean", action="store_true", help="delete frame files already in the run folder first")
     a = ap.parse_args()

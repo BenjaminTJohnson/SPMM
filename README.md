@@ -6,9 +6,6 @@ writing the particle at a series of melted fractions for use in scattering calcu
 Requires CMake 3.20 or newer and a Fortran compiler (tested with gfortran, ifort and ifx).
 The viewer and helper scripts need Python 3 with numpy and scipy.
 
-The program to use is `spmm_bond`. An earlier program, `spmm`, is kept for comparison and
-is described at the end.
-
 ## Build and run
 
 ```
@@ -17,7 +14,7 @@ cmake --build build
 mkdir example && cd example
 ln -s ../shape_files/shape.dat .
 cp ../shape_files/spmm.nml .
-../build/src/spmm_bond
+../build/src/spmm
 ```
 
 To choose a compiler, set `FC` when configuring, for example `FC=ifx cmake -S . -B build`.
@@ -32,7 +29,7 @@ small file for the viewer (see "Viewing a run").
 
 ## Input
 
-`spmm_bond` reads `shape.dat` from the run folder: one header line, then one dipole per
+`spmm` reads `shape.dat` from the run folder: one header line, then one dipole per
 line as `x y z type`, with integer lattice coordinates. `type` 2 is liquid; anything else is
 ice. Settings are read from an optional namelist file `spmm.nml` in the same folder.
 
@@ -70,7 +67,7 @@ To change this, add a `&melt` group to `spmm.nml`:
 `targets` are fractions between 0 and 1 in ascending order (up to 100 of them); `dfmax` and
 `dfmax_late` are the caps below and from `f_late`.
 
-## How `spmm_bond` works
+## How it works
 
 Ice melts where it is exposed: an ice dipole with few ice neighbours is eligible, and the
 threshold rises when nothing qualifies. Liquid then moves to lower a pair energy with
@@ -121,7 +118,7 @@ still going. It needs an internet connection only for fonts and one small librar
 `scripts/pack_melt_frames.py OUT.json FRAME...` packs a set of frames into one small JSON
 file that the viewer also opens (a few megabytes instead of hundreds).
 
-`scripts/run_packed.py` runs `spmm_bond` in a run folder and packs the frames into
+`scripts/run_packed.py` runs `spmm` in a run folder and packs the frames into
 `packed.json` there when it finishes:
 
 ```
@@ -134,15 +131,16 @@ reopened in the viewer during the run. `--exe PATH` runs a different program, `-
 the run folder, and `--clean` deletes frames left there by an earlier run (without it the
 script stops if it finds any).
 
-## The earlier program, `spmm`
+## Deprecated: `spmm_legacy`
 
-`spmm` (`src/domain_melt5.f90`) uses the same melting rule, input and frame format, with
-frames named `domain5_fNNNNNN.out`, and reads only the `&melt` group of `spmm.nml`. Its
-liquid moves one cell at a time toward the particle's centre of mass, and only when it is
-not touching ice. It is no longer being developed:
+The earlier program (`src/domain_melt5.f90`) is deprecated and is not built by default.
+Configure with `-DSPMM_BUILD_LEGACY=ON` to build it as `spmm_legacy`. It uses the same
+melting rule, input and frame format, with frames named `domain5_fNNNNNN.out`, and reads
+only the `&melt` group of `spmm.nml`. Its liquid moves one cell at a time toward the
+particle's centre of mass, and only when it is not touching ice. Compared with `spmm`:
 
 - the fully melted drop is less round (0.835 : 0.927 : 1 on the sample shape);
 - on open aggregates pieces detach in mid-melt and are not brought back;
 - frames are in lattice coordinates, with a drift of 1 to 3 cells.
 
-It conserves mass in the same way and ends with the same number of dipoles as `spmm_bond`.
+It conserves mass in the same way and ends with the same number of dipoles.
