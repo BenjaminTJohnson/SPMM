@@ -9,6 +9,10 @@ PROGRAM domain_melt4
   !** main storage variables
   INTEGER, DIMENSION(:,:,:), ALLOCATABLE :: domain
   INTEGER, DIMENSION(:,:), ALLOCATABLE :: pos, oTCM
+  !** A liquid dipole's move depends only on the cells within two of it, so it is looked at again
+  !** only after one of those cells has changed ('dirty').  'who' gives the dipole in each cell.
+  INTEGER, DIMENSION(:,:,:), ALLOCATABLE :: who
+  LOGICAL(1), DIMENSION(:), ALLOCATABLE :: dirty
 
   !** local variables
   INTEGER, DIMENSION(3) :: cpos, tpos, xpos, TCM, LCM
@@ -18,7 +22,17 @@ PROGRAM domain_melt4
   INTEGER :: xNNicecnt(27), xNNliqcnt(27), xNNholcnt(27), xtype, xoffset, yoffset, zoffset
 
   REAL(8) :: rx, fliq, fliqold, tmp, c2TCM, gwt
-  REAL(8) :: target_output_fractions(19)
+
+  !** Output and melt-step control, optionally set in group &melt of the file spmm.nml.
+  !**   targets     melted mass fractions at which a frame is written, ascending (0 and 1 are always written)
+  !**   dfmax       largest fraction of the particle melted in one step while below f_late
+  !**   dfmax_late  the same, from f_late onwards
+  !** Each step melts just enough to reach the next target, or the cap if that is smaller.
+  INTEGER, PARAMETER :: maxtarg = 100
+  REAL(8) :: targets(maxtarg), dfmax = 0.005d0, dfmax_late = 0.02d0, f_late = 0.20d0, nextt
+  INTEGER :: seed = 12345, ntarg, itarget, nelig, need, left, ios
+  LOGICAL :: ex
+  NAMELIST /melt/ targets, dfmax, dfmax_late, f_late, seed
 
   !** mass conservation: ice (916.7 kg/m3 at 0C) melts to a smaller volume of water (999.84 kg/m3),
   !** so each melted ice dipole yields rho_ratio water dipoles.  The shortfall is accumulated in
@@ -37,9 +51,24 @@ PROGRAM domain_melt4
   
     
   OUTPUT = 1
-  !** define target output melt fractions
-  target_output_fractions(:) = (/0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, &
-       0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95/) 
+  !** target output melt fractions: 1% steps to 10%, 2.5% steps to 20%, then coarser
+  targets = -1.0d0
+  INQUIRE(file='spmm.nml', exist=ex)
+  IF (ex) THEN
+     OPEN(FID, file='spmm.nml', status='old')
+     READ(FID, nml=melt, iostat=ios)
+     CLOSE(FID)
+     IF (ios > 0) STOP 'error reading group &melt in spmm.nml'
+  END IF
+  IF (targets(1) < 0.0d0) targets(1:24) = (/0.005d0, 0.01d0, 0.02d0, 0.03d0, 0.04d0, 0.05d0, 0.06d0, 0.07d0, &
+       0.08d0, 0.09d0, 0.10d0, 0.125d0, 0.15d0, 0.175d0, 0.20d0, 0.25d0, 0.30d0, 0.40d0, 0.50d0, 0.60d0, &
+       0.70d0, 0.80d0, 0.90d0, 0.95d0/)
+  ntarg = COUNT(targets > 0.0d0 .AND. targets < 1.0d0)
+  DO n = 2,ntarg
+     IF (targets(n) <= targets(n-1)) STOP 'targets must be ascending, between 0 and 1'
+  END DO
+  itarget = 1
+  CALL seed_rng(seed)
 
   !** compute all permutations of directions from a given point (to find NN)
   n=0
@@ -86,6 +115,9 @@ PROGRAM domain_melt4
   zoffset = NINT(mx/2.0) - NINT(ZMAX/2.0)+1
   
   ALLOCATE(domain(XMAX,YMAX,ZMAX)) !** total 3D domain
+  ALLOCATE(who(XMAX,YMAX,ZMAX), dirty(NDIP))
+  who = 0
+  dirty = .TRUE.
   ALLOCATE(pos(NDIP,3))            !** position of liquid or ice points 
   ALLOCATE(oTCM(NDIP,3))            !** nearest TCM for the current dipole
   ALLOCATE(cq(3,NDIP), body(NDIP), bsize(NDIP), border(NDIP), brank(NDIP))  !** connected-body labelling
@@ -105,6 +137,7 @@ PROGRAM domain_melt4
      domain(i+xoffset,j+yoffset,k+zoffset) = 1     !** populate ice-occupied points in domain
      cpos           = (/i+xoffset,j+yoffset,k+zoffset/)  !** local storage of position
      pos(n,1:3)     = cpos           !** store the list of dipoles
+     who(cpos(1),cpos(2),cpos(3)) = n
      TCM(1:3)      =  TCM(1:3) + cpos(1:3)  !** computation of total center of mass of the system of all points
   END DO INIT1
 100 CLOSE(FID)
@@ -148,6 +181,13 @@ PROGRAM domain_melt4
 !     fliq        = 0.0d0
      !** MELTING BLOCK
      IF (movecnt == 0) THEN !** everything is pretty much done moving, we can melt again  .or. fliq > 0.0
+        !** how many dipoles to melt this step: enough to reach the next target, at most the cap
+        nelig = count_eligible()
+        nextt = 1.0d0
+        IF (itarget <= ntarg) nextt = targets(itarget)
+        need  = MAX(1, NINT(MERGE(dfmax, dfmax_late, fliq < f_late)*NDIP))
+        need  = MAX(1, MIN(need, CEILING((nextt - fliq)*NDIP - 1.0d-6)))
+        left  = nelig
         meltloop: DO n = 1,NDIP
            IF (pos(n,1) < 0) CYCLE meltloop  !** dipole removed by mass conservation
            i = pos(n,1)
@@ -199,14 +239,17 @@ PROGRAM domain_melt4
 !!$           !** 2. check the melt criteria
            IF (ctype == 1 .AND. NNicecnt <= NNicecntmax) THEN 
               CALL RANDOM_NUMBER(rx)
-              !** reduce rx to have a finer melt fraction resolution (i.e., get closer to target melt fractions)
-              IF (rx <= 1.0d0) THEN    !** rx is used reduce the number of melt events per iteration
+              !** pick 'need' of the 'left' eligible dipoles at random, each equally likely
+              left = left - 1
+              IF (need > 0 .AND. rx*MAX(left + 1, 1) < need) THEN
+                 need = need - 1
                  !** 3. melt the current particle (conserving mass, see rho_ratio)
                  debt = debt + (1.0d0 - rho_ratio)
                  IF (debt >= 1.0d0) THEN
                     debt          = debt - 1.0d0
                     domain(i,j,k) = 0   !** its volume is lost to the density change: leave a hole
                     pos(n,1:3)    = -1  !** flag the dipole as removed
+                    who(i,j,k)    = 0
                     ngone         = ngone + 1
                  ELSE
                     domain(i,j,k) = -1  !** switch to melted
@@ -214,10 +257,11 @@ PROGRAM domain_melt4
                  END IF
                  ctype         = -1
                  meltcnt       = meltcnt + 1 !** only keep track of melting events
+                 CALL mark_dirty(cpos)
               END IF
            END IF
         END DO meltloop
-        IF (meltcnt == 0) THEN !** no melting events occurred during this iteration
+        IF (nelig == 0) THEN !** nothing was eligible to melt during this iteration
            NNicecntmax = NNicecntmax + 1  !** increase the melt threshhold 
         END IF
      END IF
@@ -229,6 +273,8 @@ PROGRAM domain_melt4
         movecnt = 0
         moveloop: DO n = 1,NDIP
            !** 4. determine movement ability
+           IF (.NOT. dirty(n)) CYCLE moveloop  !** nothing near it has changed since it last stayed put
+           dirty(n) = .FALSE.
            IF (pos(n,1) < 0) CYCLE moveloop  !** dipole removed by mass conservation
            i = pos(n,1)
            j = pos(n,2)
@@ -336,6 +382,10 @@ PROGRAM domain_melt4
               domain(tpos(1),tpos(2),tpos(3)) = -1  !** water domain moves into tpos
               domain(cpos(1),cpos(2),cpos(3)) =  0  !** empty cpos
               pos(n,1:3) = tpos(1:3)                !** update pos array
+              who(tpos(1),tpos(2),tpos(3)) = n
+              who(cpos(1),cpos(2),cpos(3)) = 0
+              CALL mark_dirty(cpos)
+              CALL mark_dirty(tpos)
               movecnt = movecnt + 1                 !** increment the move counter
            END IF
         END DO moveloop
@@ -350,13 +400,17 @@ PROGRAM domain_melt4
      !** a liquid dipole or was removed.  (Liquid volume fraction is nliq/(NDIP-ngone).)
      fliq = DBLE(nliq + ngone)/DBLE(NDIP)
 
-     !** 0.02 below is the tunable parameter to control how close it gets to the target output fraction
-     IF (fliq > fliqold .AND. ANY(ABS(target_output_fractions(:) - fliq)/fliq < 0.02)) then
-        nn = MINVAL(MINLOC((ABS(target_output_fractions(:) - fliq)/fliq)))
-        PRINT '(A,2I9,2G12.2)', 'output1:',  niter, nliq, fliq, target_output_fractions(nn)
-        target_output_fractions(nn) = -99 !** once we've outputted at a specific melt fraction, remove it from the list
-        fliqold = fliq      
-        IF (OUTPUT == 1) CALL write_frame()
+     !** write a frame when the next target has been reached (to within half a dipole)
+     IF (itarget <= ntarg) THEN
+        IF (fliq >= targets(itarget) - 0.5d0/NDIP .AND. icecnt > 0) THEN
+           PRINT '(A,2I9,2F12.5)', 'output1:',  niter, nliq, fliq, targets(itarget)
+           DO WHILE (itarget <= ntarg)
+              IF (fliq < targets(itarget) - 0.5d0/NDIP) EXIT
+              itarget = itarget + 1
+           END DO
+           fliqold = fliq
+           IF (OUTPUT == 1) CALL write_frame()
+        END IF
      END IF
      
 
@@ -374,6 +428,50 @@ PROGRAM domain_melt4
   END DO iterloop
   
 CONTAINS
+
+  SUBROUTINE seed_rng(sd)
+    INTEGER, INTENT(in) :: sd
+    INTEGER :: ns, is
+    INTEGER, ALLOCATABLE :: sv(:)
+    CALL RANDOM_SEED(size=ns)
+    ALLOCATE(sv(ns))
+    DO is = 1,ns
+       sv(is) = sd + 37*is
+    END DO
+    CALL RANDOM_SEED(put=sv)
+  END SUBROUTINE seed_rng
+
+  !** number of ice dipoles that meet the melting criterion now
+  INTEGER FUNCTION count_eligible()
+    INTEGER :: nd, mb, tp(3), nice
+    count_eligible = 0
+    DO nd = 1,NDIP
+       IF (pos(nd,1) < 0) CYCLE
+       IF (domain(pos(nd,1),pos(nd,2),pos(nd,3)) /= 1) CYCLE
+       nice = 0
+       DO mb = 1,27
+          IF (mb == 14) CYCLE
+          tp = pos(nd,1:3) + PDIRS(mb,1:3)
+          IF (ANY(tp(:) <= 0) .OR. tp(1) > XMAX .OR. tp(2) > YMAX .OR. tp(3) > ZMAX) CYCLE
+          IF (domain(tp(1),tp(2),tp(3)) == 1) nice = nice + 1
+       END DO
+       IF (nice <= NNicecntmax) count_eligible = count_eligible + 1
+    END DO
+  END FUNCTION count_eligible
+
+  !** the cell at c has changed: every dipole within two cells of it must be looked at again
+  SUBROUTINE mark_dirty(c)
+    INTEGER, INTENT(in) :: c(3)
+    INTEGER :: a, b, d, w
+    DO d = MAX(1,c(3)-2), MIN(ZMAX,c(3)+2)
+       DO b = MAX(1,c(2)-2), MIN(YMAX,c(2)+2)
+          DO a = MAX(1,c(1)-2), MIN(XMAX,c(1)+2)
+             w = who(a,b,d)
+             IF (w > 0) dirty(w) = .TRUE.
+          END DO
+       END DO
+    END DO
+  END SUBROUTINE mark_dirty
 
   !** write the current state for every dipole still present:
   !**   index, x, y, z, type (1 = ice, -1 = liquid), body number (1 = largest connected body)
