@@ -4,3 +4,5 @@ example/
 *.o
 *~
 __pycache__/
+/spmm
+/spmm_bond

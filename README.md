@@ -1,6 +1,13 @@
 # SPMM
 Single Particle Melting Model for ice-phase precipitation hydrometeor melting simulations.
+It takes an ice particle described as dipoles on a cubic lattice and melts it step by step,
+writing the particle at a series of melted fractions for use in scattering calculations.
+
 Requires CMake 3.20 or newer and a Fortran compiler (tested with gfortran, ifort and ifx).
+The viewer and helper scripts need Python 3 with numpy and scipy.
+
+The program to use is `spmm_bond`. An earlier program, `spmm`, is kept for comparison and
+is described at the end.
 
 ## Build and run
 
@@ -9,14 +16,32 @@ cmake -S . -B build            # add -DCMAKE_BUILD_TYPE=Debug for bounds checkin
 cmake --build build
 mkdir example && cd example
 ln -s ../shape_files/shape.dat .
-../build/src/spmm
+cp ../shape_files/spmm.nml .
+../build/src/spmm_bond
 ```
 
 To choose a compiler, set `FC` when configuring, for example `FC=ifx cmake -S . -B build`.
 `-DSPMM_NATIVE=ON` tunes for the build machine's CPU.
 
-`spmm` (`src/domain_melt5.f90`) reads `shape.dat` and writes one frame per target melt
-fraction, named `domain5_fNNNNNN.out`, where `NNNNNN` is the melted mass fraction in
+The sample takes about 3.5 minutes and writes 26 frames, `agg_f000000.out` to
+`agg_f100000.out`. It starts with 159,957 dipoles and ends with 146,657 (13,300 removed for
+mass conservation) as a single, nearly spherical drop with axis ratios 0.982 : 0.994 : 1.
+
+`python3 ../scripts/run_packed.py` does the same run and also packs the frames into one
+small file for the viewer (see "Viewing a run").
+
+## Input
+
+`spmm_bond` reads `shape.dat` from the run folder: one header line, then one dipole per
+line as `x y z type`, with integer lattice coordinates. `type` 2 is liquid; anything else is
+ice. Settings are read from an optional namelist file `spmm.nml` in the same folder.
+
+Use `shape_files/spmm.nml` as the starting point. Without it the noise levels default to
+zero and the fully melted drop stays visibly faceted (near 0.93 : 0.95 : 1).
+
+## Output
+
+Frames are named `<prefix>_fNNNNNN.out`, where `NNNNNN` is the melted mass fraction in
 thousandths of a percent. Each line is
 
 ```
@@ -24,22 +49,16 @@ index  x  y  z  type  body
 ```
 
 `type` is 1 for ice and -1 for liquid. `body` numbers the connected bodies (26 neighbours,
-ice and liquid together); body 1 is the largest, so anything higher is detached. Dipoles are
-removed as ice melts so that mass is conserved (ice 916.7, water 999.84 kg m^-3).
+ice and liquid together); body 1 is the largest, so anything higher is detached.
 
-`shape.dat` has one header line, then one dipole per line as `x y z type`.
+A frame is written at 0%, at each target melted fraction, and at 100%. The default targets
+are 0.5%, every 1% from 1% to 10%, every 2.5% to 20%, then 25%, 30%, every 10% to 90%, and
+95%: 26 frames, 16 of them at or below 20%, where absorption changes fastest. Each melt step
+melts just enough ice to reach the next target, so frames land on the targets to within one
+dipole, but never more than a cap: 0.5% of the particle per step below 20% melted, 2% above.
+Which eligible ice melts in a step is chosen at random from a fixed seed.
 
-## Output frames and melt steps
-
-Both programs write a frame at 0%, at each target melted fraction, and at 100%. The default
-targets are 0.5%, every 1% from 1% to 10%, every 2.5% to 20%, then 25%, 30%, every 10% to
-90%, and 95%: 26 frames, 16 of them at or below 20%, where absorption changes fastest. Each
-melt step melts just enough ice to reach the next target, so frames land on the targets to
-within one dipole, but never more than a cap: 0.5% of the particle per step below 20%
-melted, 2% above. Which eligible ice melts in a step is chosen at random from a fixed seed.
-
-To change this, put a `&melt` group in a file `spmm.nml` in the run folder (read by both
-programs):
+To change this, add a `&melt` group to `spmm.nml`:
 
 ```
 &melt
@@ -51,44 +70,12 @@ programs):
 `targets` are fractions between 0 and 1 in ascending order (up to 100 of them); `dfmax` and
 `dfmax_late` are the caps below and from `f_late`.
 
-## Viewing a run
+## How `spmm_bond` works
 
-`tools/melt_viewer.html` is a self-contained 3-D viewer. Open it in a browser, then use
-"Open folder" or "Open frames" to load the frame files of any run, including one that is
-still going. It needs an internet connection only for fonts and one small library.
-
-`scripts/pack_melt_frames.py OUT.json FRAME...` packs a set of frames into one small JSON
-file that the viewer also opens (needs numpy and scipy).
-
-`scripts/run_packed.py` runs `spmm_bond` in a run folder and packs the frames into
-`packed.json` there when it finishes:
-
-```
-cd my_run                               # holds shape.dat and, optionally, spmm.nml
-python3 ../scripts/run_packed.py        # add --live to repack as each frame is written
-```
-
-With `--live` the JSON is rebuilt whenever a new frame is complete, so it can be opened and
-reopened in the viewer during the run. `--exe PATH` runs a different program (for example
-`build/src/spmm`), `--dir` names the run folder, and `--clean` deletes frames left there by
-an earlier run (without it the script stops if it finds any).
-
-## Surface-energy prototype (`spmm_bond`)
-
-`src/spmm_bond.f90` replaces the liquid movement rule. Liquid moves to lower a pair energy
-with separate ice and water affinities, using a noisy phase followed by a quench. It writes
-frames in the same six-column format as `spmm`, named `<prefix>_fNNNNNN.out`, and conserves
-mass in the same way (`conserve_mass=.false.` turns the removal of dipoles off).
-
-Ice is held on the lattice while water relocates toward the bulk of the particle, so the
-centre of mass wanders in lattice coordinates (by 5 to 9 cells over a full melt), which a
-free particle's cannot. Each frame is therefore written shifted by whole cells so that its
-centre of mass stays within half a cell of where it started; the simulation itself is not
-changed. `recentre=.false.` writes lattice coordinates instead.
-
-It reads `shape.dat` and an optional namelist file `spmm.nml`. Settings that give a nearly
-spherical final drop (axis ratios 0.982 : 0.994 : 1, 146,657 dipoles, about 3.5 minutes) on
-`shape_files/shape.dat`:
+Ice melts where it is exposed: an ice dipole with few ice neighbours is eligible, and the
+threshold rises when nothing qualifies. Liquid then moves to lower a pair energy with
+separate ice and water affinities, in a noisy phase followed by a quench. The `&spmm` group
+of `spmm.nml` controls this:
 
 ```
 &spmm
@@ -103,13 +90,59 @@ levels of 4 or less leave the drop near 0.93 : 0.95 : 1. `a_i` is the ice affini
 to water (`a_w`): below 1 the water beads, at 1.0 to 1.2 it coats the ice. `pin_coating`
 holds liquid that touches ice in place.
 
-Each water body only rearranges itself, so pieces can separate: a water blob, or an ice
-fragment whose connecting neck has melted and drained. Left alone they never rejoin (on a
-20-flake aggregate the fully melted particle ended as 104 separate drops). So after every
-melt step each body that has lost contact with the rest is shifted rigidly, without changing
-shape, to the nearest position where it touches another body; the largest body never moves.
-Water that touches other water then merges with it in the normal relaxation, and the run
-prints the number of shifts made. `reattach=.false.` turns this off, for diagnosis only.
+Three things are done by default, each with a switch:
 
-Test shapes and analysis scripts are in
-`scripts/proto/`.
+- **Mass conservation.** Ice (916.7 kg m^-3) melts to a smaller volume of water (999.84), so
+  about one melting dipole in twelve is removed instead of becoming water. The melted
+  fraction is the melted mass fraction, counting removed dipoles as melted.
+  `conserve_mass=.false.` keeps every dipole.
+- **Reattaching detached pieces.** Each water body only rearranges itself, so pieces can
+  separate: a water blob, or an ice fragment whose connecting neck has melted and drained.
+  Left alone they never rejoin (on a 20-flake aggregate the fully melted particle ended as
+  104 separate drops). After every melt step each body that has lost contact with the rest
+  is shifted rigidly, without changing shape, to the nearest position where it touches
+  another body; the largest body never moves. Water that touches other water then merges
+  with it in the normal relaxation. `reattach=.false.` turns this off, for diagnosis only.
+- **Centre-of-mass frame.** Ice is held on the lattice while water relocates toward the bulk
+  of the particle, so the centre of mass wanders in lattice coordinates (by 5 to 9 cells
+  over a full melt), which a free particle's cannot. Each frame is written shifted by whole
+  cells so that its centre of mass stays within half a cell of where it started; the
+  simulation itself is not changed. `recentre=.false.` writes lattice coordinates.
+
+Test shapes and analysis scripts are in `scripts/proto/`;
+`python3 scripts/proto/axes.py FRAME...` prints axis ratios, body counts and the centroid.
+
+## Viewing a run
+
+`tools/melt_viewer.html` is a self-contained 3-D viewer. Open it in a browser, then use
+"Open folder" or "Open frames" to load the frame files of any run, including one that is
+still going. It needs an internet connection only for fonts and one small library.
+
+`scripts/pack_melt_frames.py OUT.json FRAME...` packs a set of frames into one small JSON
+file that the viewer also opens (a few megabytes instead of hundreds).
+
+`scripts/run_packed.py` runs `spmm_bond` in a run folder and packs the frames into
+`packed.json` there when it finishes:
+
+```
+cd my_run                               # holds shape.dat and spmm.nml
+python3 ../scripts/run_packed.py        # add --live to repack as each frame is written
+```
+
+With `--live` the JSON is rebuilt whenever a new frame is complete, so it can be opened and
+reopened in the viewer during the run. `--exe PATH` runs a different program, `--dir` names
+the run folder, and `--clean` deletes frames left there by an earlier run (without it the
+script stops if it finds any).
+
+## The earlier program, `spmm`
+
+`spmm` (`src/domain_melt5.f90`) uses the same melting rule, input and frame format, with
+frames named `domain5_fNNNNNN.out`, and reads only the `&melt` group of `spmm.nml`. Its
+liquid moves one cell at a time toward the particle's centre of mass, and only when it is
+not touching ice. It is no longer being developed:
+
+- the fully melted drop is less round (0.835 : 0.927 : 1 on the sample shape);
+- on open aggregates pieces detach in mid-melt and are not brought back;
+- frames are in lattice coordinates, with a drift of 1 to 3 cells.
+
+It conserves mass in the same way and ends with the same number of dipoles as `spmm_bond`.
