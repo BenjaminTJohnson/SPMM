@@ -27,6 +27,12 @@ PROGRAM domain_melt4
   REAL(8), PARAMETER :: rho_ratio = 916.7d0/999.84d0
   REAL(8) :: debt
   INTEGER :: nliq, ngone   !** liquid dipoles present, dipoles removed on melting
+
+  !** connected bodies: dipoles (ice and liquid together) joined through any of their 26 neighbours.
+  !** Labelled whenever a frame is written; body 1 is the largest, so detached droplets are body >= 2.
+  INTEGER, DIMENSION(:,:), ALLOCATABLE :: cq          !** flood-fill queue of positions
+  INTEGER, DIMENSION(:), ALLOCATABLE :: body, bsize, border, brank
+  INTEGER :: nbody
   CHARACTER(len=64) :: outfn, inpfn
   
     
@@ -82,6 +88,7 @@ PROGRAM domain_melt4
   ALLOCATE(domain(XMAX,YMAX,ZMAX)) !** total 3D domain
   ALLOCATE(pos(NDIP,3))            !** position of liquid or ice points 
   ALLOCATE(oTCM(NDIP,3))            !** nearest TCM for the current dipole
+  ALLOCATE(cq(3,NDIP), body(NDIP), bsize(NDIP), border(NDIP), brank(NDIP))  !** connected-body labelling
   
   !** read input data !CONTINUE modifications here, to read the default file if it's the first time running
   !** or to read a melt file on subsequent times running.  Maybe add an args option to read the filename? maybe not needed.
@@ -368,19 +375,107 @@ PROGRAM domain_melt4
   
 CONTAINS
 
-  !** write the current state: index, position, type (1 = ice, -1 = liquid) for every dipole still present
+  !** write the current state for every dipole still present:
+  !**   index, x, y, z, type (1 = ice, -1 = liquid), body number (1 = largest connected body)
   SUBROUTINE write_frame()
-    INTEGER :: nd, nout
+    INTEGER :: nd, nout, top(3)
+    CALL label_bodies()
     WRITE(outfn,'(''domain5_f'',I6.6,''.out'')') NINT(fliq*100000.0d0)
     OPEN(OUTFID,file=outfn,status='replace')
     nout = 0
     DO nd = 1,NDIP
        IF (pos(nd,1) < 0) CYCLE  !** removed by mass conservation
        nout = nout + 1
-       WRITE(OUTFID, '(6I9)') nout, pos(nd,1:3), domain(pos(nd,1),pos(nd,2),pos(nd,3))
+       WRITE(OUTFID, '(6I9)') nout, pos(nd,1:3), domain(pos(nd,1),pos(nd,2),pos(nd,3)), body(nd)
     END DO
     CLOSE(OUTFID)
+    top = 0                                     !** sizes of the three largest bodies (0 if fewer)
+    DO nd = 1,MIN(3,nbody)
+       top(nd) = bsize(border(nd))
+    END DO
+    PRINT '(A,I8,A,3I9,A,I9)', 'bodies: ', nbody, '  largest: ', top, '  detached dipoles: ', nout - top(1)
   END SUBROUTINE write_frame
+
+  !** label connected bodies by flood fill.  While a body is being filled its cells in 'domain' hold
+  !** 100 + 2*body + (1 if liquid), so no second domain-sized array is needed; they are restored to
+  !** 1 / -1 before returning.  Sets nbody, bsize, border (body ids, largest first) and body(n).
+  SUBROUTINE label_bodies()
+    INTEGER :: nd, qh, qt, mb, v, cp(3), tp(3)
+    nbody = 0
+    DO nd = 1,NDIP
+       IF (pos(nd,1) < 0) CYCLE
+       v = domain(pos(nd,1),pos(nd,2),pos(nd,3))
+       IF (v >= 100) CYCLE                      !** already part of a labelled body
+       nbody = nbody + 1
+       bsize(nbody) = 0
+       qh = 1
+       qt = 1
+       cq(:,1) = pos(nd,1:3)
+       domain(pos(nd,1),pos(nd,2),pos(nd,3)) = 100 + 2*nbody + MERGE(1,0,v == -1)
+       DO WHILE (qh <= qt)
+          cp = cq(:,qh)
+          qh = qh + 1
+          bsize(nbody) = bsize(nbody) + 1
+          DO mb = 1,27
+             IF (mb == 14) CYCLE                !** skip self
+             tp = cp + PDIRS(mb,1:3)
+             IF (ANY(tp(:) <= 0) .OR. tp(1) > XMAX .OR. tp(2) > YMAX .OR. tp(3) > ZMAX) CYCLE
+             v = domain(tp(1),tp(2),tp(3))
+             IF (v == 1 .OR. v == -1) THEN
+                domain(tp(1),tp(2),tp(3)) = 100 + 2*nbody + MERGE(1,0,v == -1)
+                qt = qt + 1
+                cq(:,qt) = tp
+             END IF
+          END DO
+       END DO
+    END DO
+    !** rank bodies by size, largest first
+    DO nd = 1,nbody
+       border(nd) = nd
+    END DO
+    IF (nbody > 1) CALL sort_bodies(1, nbody)
+    DO nd = 1,nbody
+       brank(border(nd)) = nd
+    END DO
+    !** per-dipole body number, and restore the domain
+    DO nd = 1,NDIP
+       IF (pos(nd,1) < 0) THEN
+          body(nd) = 0
+          CYCLE
+       END IF
+       v = domain(pos(nd,1),pos(nd,2),pos(nd,3)) - 100
+       body(nd) = brank(v/2)
+       domain(pos(nd,1),pos(nd,2),pos(nd,3)) = MERGE(-1,1,MOD(v,2) == 1)
+    END DO
+  END SUBROUTINE label_bodies
+
+  !** quicksort of border(l:h) by descending body size
+  RECURSIVE SUBROUTINE sort_bodies(l, h)
+    INTEGER, INTENT(in) :: l, h
+    INTEGER :: il, ih, pv, tmpb
+    IF (l >= h) RETURN
+    pv = bsize(border((l + h)/2))
+    il = l
+    ih = h
+    DO
+       DO WHILE (bsize(border(il)) > pv)
+          il = il + 1
+       END DO
+       DO WHILE (bsize(border(ih)) < pv)
+          ih = ih - 1
+       END DO
+       IF (il <= ih) THEN
+          tmpb = border(il)
+          border(il) = border(ih)
+          border(ih) = tmpb
+          il = il + 1
+          ih = ih - 1
+       END IF
+       IF (il > ih) EXIT
+    END DO
+    CALL sort_bodies(l, ih)
+    CALL sort_bodies(il, h)
+  END SUBROUTINE sort_bodies
   
   INTEGER FUNCTION sgn(ns)
     INTEGER :: ns
