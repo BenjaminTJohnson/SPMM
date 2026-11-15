@@ -1,0 +1,6 @@
+build*/
+example/
+*.mod
+*.o
+*~
+__pycache__/
