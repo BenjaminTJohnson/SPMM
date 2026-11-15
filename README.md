@@ -27,6 +27,30 @@ index  x  y  z  type  body
 ice and liquid together); body 1 is the largest, so anything higher is detached. Dipoles are
 removed as ice melts so that mass is conserved (ice 916.7, water 999.84 kg m^-3).
 
+`shape.dat` has one header line, then one dipole per line as `x y z type`.
+
+## Output frames and melt steps
+
+Both programs write a frame at 0%, at each target melted fraction, and at 100%. The default
+targets are 0.5%, every 1% from 1% to 10%, every 2.5% to 20%, then 25%, 30%, every 10% to
+90%, and 95%: 26 frames, 16 of them at or below 20%, where absorption changes fastest. Each
+melt step melts just enough ice to reach the next target, so frames land on the targets to
+within one dipole, but never more than a cap: 0.5% of the particle per step below 20%
+melted, 2% above. Which eligible ice melts in a step is chosen at random from a fixed seed.
+
+To change this, put a `&melt` group in a file `spmm.nml` in the run folder (read by both
+programs):
+
+```
+&melt
+ targets = 0.0025, 0.005, 0.0075, 0.01, 0.015, 0.02, 0.03, 0.05, 0.10, 0.20, 0.50,
+ dfmax = 0.005, dfmax_late = 0.02, f_late = 0.20, seed = 12345
+/
+```
+
+`targets` are fractions between 0 and 1 in ascending order (up to 100 of them); `dfmax` and
+`dfmax_late` are the caps below and from `f_late`.
+
 ## Viewing a run
 
 `tools/melt_viewer.html` is a self-contained 3-D viewer. Open it in a browser, then use
@@ -60,5 +84,15 @@ spherical final drop (axis ratios 0.988 : 0.994 : 1) on `shape_files/shape.dat`:
 `temp` is the noise level while melting and `temp_final` the level for the final rounding;
 levels of 4 or less leave the drop near 0.93 : 0.95 : 1. `a_i` is the ice affinity relative
 to water (`a_w`): below 1 the water beads, at 1.0 to 1.2 it coats the ice. `pin_coating`
-holds liquid that touches ice in place. Test shapes and analysis scripts are in
+holds liquid that touches ice in place.
+
+Each water body only rearranges itself, so pieces can separate: a water blob, or an ice
+fragment whose connecting neck has melted and drained. Left alone they never rejoin (on a
+20-flake aggregate the fully melted particle ended as 104 separate drops). So after every
+melt step each body that has lost contact with the rest is shifted rigidly, without changing
+shape, to the nearest position where it touches another body; the largest body never moves.
+Water that touches other water then merges with it in the normal relaxation, and the run
+prints the number of shifts made. `reattach=.false.` turns this off, for diagnosis only.
+
+Test shapes and analysis scripts are in
 `scripts/proto/`.
