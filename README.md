@@ -60,6 +60,19 @@ still going. It needs an internet connection only for fonts and one small librar
 `scripts/pack_melt_frames.py OUT.json FRAME...` packs a set of frames into one small JSON
 file that the viewer also opens (needs numpy and scipy).
 
+`scripts/run_packed.py` runs `spmm_bond` in a run folder and packs the frames into
+`packed.json` there when it finishes:
+
+```
+cd my_run                               # holds shape.dat and, optionally, spmm.nml
+python3 ../scripts/run_packed.py        # add --live to repack as each frame is written
+```
+
+With `--live` the JSON is rebuilt whenever a new frame is complete, so it can be opened and
+reopened in the viewer during the run. `--exe PATH` runs a different program (for example
+`build/src/spmm`), `--dir` names the run folder, and `--clean` deletes frames left there by
+an earlier run (without it the script stops if it finds any).
+
 ## Surface-energy prototype (`spmm_bond`)
 
 `src/spmm_bond.f90` replaces the liquid movement rule. Liquid moves to lower a pair energy
