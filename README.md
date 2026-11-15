@@ -62,16 +62,15 @@ file that the viewer also opens (needs numpy and scipy).
 
 ## Surface-energy prototype (`spmm_bond`)
 
-`src/spmm_bond.f90` is an experimental replacement for the liquid movement rule. Liquid
-moves to lower a pair energy with separate ice and water affinities, using a noisy phase
-followed by a quench. It is not yet a replacement for `spmm`:
+`src/spmm_bond.f90` replaces the liquid movement rule. Liquid moves to lower a pair energy
+with separate ice and water affinities, using a noisy phase followed by a quench. It writes
+frames in the same six-column format as `spmm`, named `<prefix>_fNNNNNN.out`, and conserves
+mass in the same way (`conserve_mass=.false.` turns the removal of dipoles off). One thing is
+not yet understood: the fully melted drop ends about 5 cells from the starting centroid.
 
-- it does not remove dipoles on melting, so it does not conserve mass;
-- the fully melted drop ends about 6 cells from the starting centroid, for reasons not yet understood;
-- it writes five columns (no body column).
-
-It reads `shape.dat` and an optional namelist file `spmm.nml`. Settings that gave a nearly
-spherical final drop (axis ratios 0.988 : 0.994 : 1) on `shape_files/shape.dat`:
+It reads `shape.dat` and an optional namelist file `spmm.nml`. Settings that give a nearly
+spherical final drop (axis ratios 0.982 : 0.994 : 1, 146,657 dipoles, about 3.5 minutes) on
+`shape_files/shape.dat`:
 
 ```
 &spmm

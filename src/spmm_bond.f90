@@ -24,10 +24,17 @@ program spmm_bond
   integer  :: ntarg, need, left
   logical  :: do_melt = .true., pin_coating = .false., nonlocal = .true., check = .false.
   logical  :: reattach = .true.    !** move bodies that lose contact with the rest back into contact
+  !** mass conservation: ice (916.7 kg/m3 at 0C) melts to a smaller volume of water (999.84 kg/m3), so
+  !** each melted ice point yields rho_ratio water points.  The shortfall is accumulated in 'debt';
+  !** each time it reaches one whole point, the melting point is removed instead of becoming water.
+  logical  :: conserve_mass = .true.
+  real(dp), parameter :: rho_ratio = 916.7_dp/999.84_dp
+  real(dp) :: debt = 0.0_dp
+  integer  :: N0, ngone = 0        !** points at the start, points removed on melting
   integer  :: max_sweeps = 40, max_final_sweeps = 20000, nheader = 1, seed = 12345, sweeps_hot = 0, final_hot = 0
   namelist /spmm/ shape_file, prefix, a_i, a_w, margin, rkern, p_melt, move_frac, dfmax, temp, temp_final, sweeps_hot, final_hot, &
        do_melt, pin_coating, nonlocal, check, max_sweeps, max_final_sweeps, nheader, seed, reattach, &
-       targets, dfmax_late, f_late
+       targets, dfmax_late, f_late, conserve_mass
   namelist /melt/ targets, dfmax, dfmax_late, f_late, seed
 
   real(dp), parameter :: eps = 1.0e-9_dp, pi = 3.141592653589793_dp
@@ -98,6 +105,7 @@ program spmm_bond
   end do
   close(fid)
   if (N == 0) stop 'no dipoles read'
+  N0 = N
 
   !** centred domain with room for the equal-volume sphere and the kernel halo
   aeq = (3.0_dp*N/(4.0_dp*pi))**(1.0_dp/3.0_dp)
@@ -114,7 +122,7 @@ program spmm_bond
   hcap = 8*N + 1000
   allocate(hpos(3, hcap), hcomp(hcap), hkey(hcap), horder(hcap))
   typ = 0_i1; S = 0.0_dp; idx = 0; mark = 0; sweepid = 0
-  if (reattach) allocate(bl(N), bq(N), bst(N + 1), btyp(N))
+  allocate(bl(N), bq(N), bst(N + 1), btyp(N))
   totre = 0; totst = 0
 
   !** pass 2: load
@@ -148,7 +156,7 @@ program spmm_bond
   end do
   itarget = 1
   totsw = 0; totmov = 0; niter = 0; nnmax = 5
-  call counts(nice, nliq); fliq = real(nliq, dp)/N
+  call counts(nice, nliq); fliq = real(nliq + ngone, dp)/N0
   if (do_melt) then
      call output_frac(fliq)
   else
@@ -173,8 +181,8 @@ program spmm_bond
         !** how many to melt this step: enough to reach the next target, at most the cap
         nextt = 1.0_dp
         if (itarget <= ntarg) nextt = targets(itarget)
-        need = max(1, nint(merge(dfmax, dfmax_late, fliq < f_late)*N))
-        need = max(1, min(need, ceiling((nextt - fliq)*N - 1.0e-6_dp)))
+        need = max(1, nint(merge(dfmax, dfmax_late, fliq < f_late)*N0))
+        need = max(1, min(need, ceiling((nextt - fliq)*N0 - 1.0e-6_dp)))
         if (p_melt < 1.0_dp) need = max(1, min(need, nint(p_melt*nelig)))
         left = nelig
         do n1 = 1, N
@@ -190,24 +198,43 @@ program spmm_bond
               call random_number(rx); left = left - 1
               if (need > 0 .and. rx*max(left + 1, 1) < need) then
                  need = need - 1
-                 typ(p(1), p(2), p(3)) = -1_i1
-                 call add_field(p, a_w - a_i)
+                 if (conserve_mass) debt = debt + (1.0_dp - rho_ratio)
+                 if (debt >= 1.0_dp) then      !** its volume is lost to the density change: leave a hole
+                    debt = debt - 1.0_dp; ngone = ngone + 1
+                    typ(p(1), p(2), p(3)) = 0_i1; idx(p(1), p(2), p(3)) = 0
+                    call add_field(p, -a_i); call add_occ(p, -1_i1)
+                    pos(1, n1) = 0             !** flagged; taken out of the list after this loop
+                 else
+                    typ(p(1), p(2), p(3)) = -1_i1
+                    call add_field(p, a_w - a_i)
+                 end if
                  meltcnt = meltcnt + 1
               end if
            end if
         end do
+        if (ngone > N0 - N) then       !** close up the list over the points just removed, keeping its order
+           j = 0
+           do n1 = 1, N
+              if (pos(1, n1) == 0) cycle
+              j = j + 1
+              if (j /= n1) then
+                 pos(:, j) = pos(:, n1); idx(pos(1, j), pos(2, j), pos(3, j)) = j
+              end if
+           end do
+           N = j
+        end if
         if (nelig == 0) nnmax = nnmax + 1
         call relax(max_sweeps, sweeps_hot)
         if (reattach) then
            call reattach_bodies(nre, nst); totre = totre + nre; totst = totst + nst
         end if
-        call counts(nice, nliq); fliq = real(nliq, dp)/N
+        call counts(nice, nliq); fliq = real(nliq + ngone, dp)/N0
         if (nice == 0) exit meltloop
         if (itarget <= ntarg) then
-           if (fliq >= targets(itarget) - 0.5_dp/N) then
+           if (fliq >= targets(itarget) - 0.5_dp/N0) then
               call output_frac(fliq)
               do while (itarget <= ntarg)
-                 if (fliq < targets(itarget) - 0.5_dp/N) exit
+                 if (fliq < targets(itarget) - 0.5_dp/N0) exit
                  itarget = itarget + 1
               end do
            end if
@@ -233,6 +260,8 @@ program spmm_bond
      call output_name(trim(prefix)//'_final.out')
   end if
   call system_clock(c1)
+  if (do_melt) print '(A,I9,A,I9,A,F8.5)', 'mass conservation: points removed ', ngone, ' of ', N0, &
+       '  final/initial volume ', real(N, dp)/N0
   print '(A,I7,A,I8,A,I10,A,ES15.7,A,F8.1,A,L2)', 'DONE melt_iters=', niter, ' sweeps=', totsw, ' moves=', totmov, &
        ' E=', energy(), ' seconds=', real(c1 - c0, dp)/crate, ' converged=', (nmov == 0)
 
@@ -384,17 +413,11 @@ contains
   !** are shifted rigidly, without changing shape, to the nearest position that touches another
   !** body.  The largest body never moves.  nmoved counts shifts made, nstuck bodies that could
   !** not be shifted this time.
-  subroutine reattach_bodies(nmoved, nstuck)
-    integer, intent(out) :: nmoved, nstuck
-    integer :: nn, c, mm, nb, qh, qt, nbody, main, b, pp(3), qq(3), v(3), vt(3), s, L, kk, ii, i0, i1e, try
-    integer :: nfar, npart, pass, nshift, njoin
-    logical :: touching
-    real(dp) :: cm(3), cb(3)
-    logical :: hit, ok
-    nmoved = 0; nstuck = 0; nfar = 0; npart = 0
-    !** a body may land on another detached body; relabel and go again until all are one
-    passes: do pass = 1, 200
-    nshift = 0; njoin = 0; nstuck = 0
+  !** label connected bodies, ice and water together (26-connectivity): bl is the body of each point,
+  !** bq lists the points body by body and bst(b) is where body b starts in bq
+  subroutine label_bodies(nbody)
+    integer, intent(out) :: nbody
+    integer :: nn, c, mm, nb, qh, qt, qq(3)
     bl = 0; nbody = 0; qt = 0
     do nn = 1, N
        if (bl(nn) /= 0) cycle
@@ -412,6 +435,20 @@ contains
        end do
     end do
     bst(nbody + 1) = N + 1
+  end subroutine label_bodies
+
+  subroutine reattach_bodies(nmoved, nstuck)
+    integer, intent(out) :: nmoved, nstuck
+    integer :: nn, mm, nb, qh, qt, nbody, main, b, pp(3), qq(3), v(3), vt(3), s, L, kk, ii, i0, i1e, try
+    integer :: nfar, npart, pass, nshift, njoin
+    logical :: touching
+    real(dp) :: cm(3), cb(3)
+    logical :: hit, ok
+    nmoved = 0; nstuck = 0; nfar = 0; npart = 0
+    !** a body may land on another detached body; relabel and go again until all are one
+    passes: do pass = 1, 200
+    nshift = 0; njoin = 0; nstuck = 0
+    call label_bodies(nbody)
     if (nbody == 1) exit passes
     main = 1
     do b = 2, nbody
@@ -718,11 +755,18 @@ contains
 
   subroutine output_name(fn)
     character(len=*), intent(in) :: fn
-    integer :: nn, pp(3)
+    integer :: nn, pp(3), nbody, b
+    !** number the connected bodies by size: body 1 is the largest, anything higher is detached
+    call label_bodies(nbody)
+    do b = 1, nbody
+       worder(b) = b; wkey(b) = -real(bst(b + 1) - bst(b), dp)
+    end do
+    call qsort(worder, 1, nbody, wkey)
+    do b = 1, nbody; cnt(worder(b)) = b; end do
     open(17, file=fn, status='replace')
     do nn = 1, N
        pp = pos(:, nn)
-       write(17, '(5I9)') nn, pp - off, int(typ(pp(1), pp(2), pp(3)))
+       write(17, '(6I9)') nn, pp - off, int(typ(pp(1), pp(2), pp(3))), cnt(bl(nn))
     end do
     close(17)
   end subroutine output_name
