@@ -78,8 +78,13 @@ an earlier run (without it the script stops if it finds any).
 `src/spmm_bond.f90` replaces the liquid movement rule. Liquid moves to lower a pair energy
 with separate ice and water affinities, using a noisy phase followed by a quench. It writes
 frames in the same six-column format as `spmm`, named `<prefix>_fNNNNNN.out`, and conserves
-mass in the same way (`conserve_mass=.false.` turns the removal of dipoles off). One thing is
-not yet understood: the fully melted drop ends about 5 cells from the starting centroid.
+mass in the same way (`conserve_mass=.false.` turns the removal of dipoles off).
+
+Ice is held on the lattice while water relocates toward the bulk of the particle, so the
+centre of mass wanders in lattice coordinates (by 5 to 9 cells over a full melt), which a
+free particle's cannot. Each frame is therefore written shifted by whole cells so that its
+centre of mass stays within half a cell of where it started; the simulation itself is not
+changed. `recentre=.false.` writes lattice coordinates instead.
 
 It reads `shape.dat` and an optional namelist file `spmm.nml`. Settings that give a nearly
 spherical final drop (axis ratios 0.982 : 0.994 : 1, 146,657 dipoles, about 3.5 minutes) on

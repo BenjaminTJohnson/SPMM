@@ -28,13 +28,18 @@ program spmm_bond
   !** each melted ice point yields rho_ratio water points.  The shortfall is accumulated in 'debt';
   !** each time it reaches one whole point, the melting point is removed instead of becoming water.
   logical  :: conserve_mass = .true.
+  !** Ice is held on the lattice while water relocates, so the centre of mass wanders in lattice
+  !** coordinates; a free particle's cannot.  With recentre, each frame is written shifted by whole
+  !** cells so that its centre of mass stays within half a cell of where it started.
+  logical  :: recentre = .true.
+  real(dp) :: cm0(3)
   real(dp), parameter :: rho_ratio = 916.7_dp/999.84_dp
   real(dp) :: debt = 0.0_dp
   integer  :: N0, ngone = 0        !** points at the start, points removed on melting
   integer  :: max_sweeps = 40, max_final_sweeps = 20000, nheader = 1, seed = 12345, sweeps_hot = 0, final_hot = 0
   namelist /spmm/ shape_file, prefix, a_i, a_w, margin, rkern, p_melt, move_frac, dfmax, temp, temp_final, sweeps_hot, final_hot, &
        do_melt, pin_coating, nonlocal, check, max_sweeps, max_final_sweeps, nheader, seed, reattach, &
-       targets, dfmax_late, f_late, conserve_mass
+       targets, dfmax_late, f_late, conserve_mass, recentre
   namelist /melt/ targets, dfmax, dfmax_late, f_late, seed
 
   real(dp), parameter :: eps = 1.0e-9_dp, pi = 3.141592653589793_dp
@@ -157,6 +162,7 @@ program spmm_bond
   itarget = 1
   totsw = 0; totmov = 0; niter = 0; nnmax = 5
   call counts(nice, nliq); fliq = real(nliq + ngone, dp)/N0
+  cm0 = mass_centre()
   if (do_melt) then
      call output_frac(fliq)
   else
@@ -745,6 +751,19 @@ contains
     call qsort(a, l, jj, key); call qsort(a, ii, h, key)
   end subroutine qsort
 
+  !** centre of mass in grid coordinates (ice 916.7, water 999.84 kg m^-3 per cell)
+  function mass_centre() result(cm)
+    real(dp) :: cm(3), w, wsum
+    integer :: nn, pp(3)
+    cm = 0.0_dp; wsum = 0.0_dp
+    do nn = 1, N
+       pp = pos(:, nn)
+       w = merge(916.7_dp, 999.84_dp, typ(pp(1), pp(2), pp(3)) == 1_i1)
+       cm = cm + w*pp; wsum = wsum + w
+    end do
+    cm = cm/wsum
+  end function mass_centre
+
   subroutine output_frac(f)
     real(dp), intent(in) :: f
     character(len=300) :: fn
@@ -755,7 +774,9 @@ contains
 
   subroutine output_name(fn)
     character(len=*), intent(in) :: fn
-    integer :: nn, pp(3), nbody, b
+    integer :: nn, pp(3), nbody, b, sh(3)
+    sh = 0
+    if (recentre) sh = nint(mass_centre() - cm0)
     !** number the connected bodies by size: body 1 is the largest, anything higher is detached
     call label_bodies(nbody)
     do b = 1, nbody
@@ -766,7 +787,7 @@ contains
     open(17, file=fn, status='replace')
     do nn = 1, N
        pp = pos(:, nn)
-       write(17, '(6I9)') nn, pp - off, int(typ(pp(1), pp(2), pp(3))), cnt(bl(nn))
+       write(17, '(6I9)') nn, pp - off - sh, int(typ(pp(1), pp(2), pp(3))), cnt(bl(nn))
     end do
     close(17)
   end subroutine output_name
