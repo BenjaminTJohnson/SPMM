@@ -131,6 +131,24 @@ reopened in the viewer during the run. `--exe PATH` runs a different program, `-
 the run folder, and `--clean` deletes frames left there by an earlier run (without it the
 script stops if it finds any).
 
+## DDSCAT targets
+
+`scripts/frames_to_ddscat.py` turns frames into DDSCAT target files in the `FROM_FILE`
+format (needs numpy):
+
+```
+python3 scripts/frames_to_ddscat.py --spacing 20 my_run/agg_f*.out
+```
+
+This writes `my_run/ddscat/<frame>/shape.dat`, one folder per frame, and a table
+`my_run/ddscat/frames.txt` with each frame's melted fraction, dipole counts and effective
+radius. Composition 1 is ice and composition 2 is liquid water in every file, so
+`ddscat.par` needs `NCOMP = 2` with the ice refractive-index file first and the water file
+second, including for frames that are all ice or all water. DDSCAT takes the dipole spacing
+from the effective radius, `aeff = (3 N / 4 pi)^(1/3) d`: the table gives `aeff/d`, and with
+`--spacing` (the dipole spacing in micrometres) also `aeff` in micrometres. `--out` names
+the output folder and `--main-body` keeps only the largest connected body.
+
 ## Deprecated: `spmm_legacy`
 
 The earlier program (`src/domain_melt5.f90`) is deprecated and is not built by default.
