@@ -1,8 +1,23 @@
-# CMakeLists files in this project can
-# refer to the root source directory of the project as ${HELLO_SOURCE_DIR} and
-# to the root binary directory of the project as ${HELLO_BINARY_DIR}.
-cmake_minimum_required (VERSION 2.8.11)
-project (SPMM LANGUAGES Fortran )
+cmake_minimum_required(VERSION 3.20)
+project(SPMM LANGUAGES Fortran)
 
-add_subdirectory (src)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 
+option(SPMM_NATIVE "Tune for the build host CPU (binary may not run on other nodes)" OFF)
+option(SPMM_BUILD_LEGACY "Also build the deprecated program spmm_legacy (src/domain_melt5.f90)" OFF)
+
+set(id ${CMAKE_Fortran_COMPILER_ID})
+if(id STREQUAL "GNU")
+  set(CMAKE_Fortran_FLAGS_RELEASE "-O3")
+  set(CMAKE_Fortran_FLAGS_DEBUG   "-O0 -g -Wall -Wextra -fcheck=all -fbacktrace")
+  set(native -march=native)
+elseif(id STREQUAL "Intel" OR id STREQUAL "IntelLLVM")
+  set(CMAKE_Fortran_FLAGS_RELEASE "-O3")
+  set(CMAKE_Fortran_FLAGS_DEBUG   "-O0 -g -warn all -check all -traceback")
+  set(native -xHost)
+endif()
+
+add_subdirectory(src)
+message(STATUS "Fortran compiler: ${CMAKE_Fortran_COMPILER} (${id}), build type ${CMAKE_BUILD_TYPE}")

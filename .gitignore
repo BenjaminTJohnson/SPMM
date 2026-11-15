@@ -1,0 +1,9 @@
+build*/
+example/
+*.mod
+*.o
+*~
+__pycache__/
+/spmm
+/spmm_bond
+/spmm_legacy

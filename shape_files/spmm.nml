@@ -1,0 +1,6 @@
+! Recommended settings for spmm; copy into the run folder next to shape.dat.
+&spmm
+ do_melt=.true., prefix="agg", a_i=1.0,
+ temp=4.0, sweeps_hot=10, max_sweeps=40,
+ temp_final=8.0, final_hot=10000
+/
