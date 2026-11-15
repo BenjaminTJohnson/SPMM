@@ -22,7 +22,7 @@ To choose a compiler, set `FC` when configuring, for example `FC=ifx cmake -S . 
 
 The sample takes about 3.5 minutes and writes 26 frames, `agg_f000000.out` to
 `agg_f100000.out`. It starts with 159,957 dipoles and ends with 146,657 (13,300 removed for
-mass conservation) as a single, nearly spherical drop with axis ratios 0.982 : 0.994 : 1.
+mass conservation) as a single, nearly spherical drop with axis ratios 0.988 : 0.994 : 1.
 
 `python3 ../scripts/run_packed.py` does the same run and also packs the frames into one
 small file for the viewer (see "Viewing a run").
@@ -87,7 +87,7 @@ levels of 4 or less leave the drop near 0.93 : 0.95 : 1. `a_i` is the ice affini
 to water (`a_w`): below 1 the water beads, at 1.0 to 1.2 it coats the ice. `pin_coating`
 holds liquid that touches ice in place.
 
-Three things are done by default, each with a switch:
+Four things are done by default, each with a switch:
 
 - **Mass conservation.** Ice (916.7 kg m^-3) melts to a smaller volume of water (999.84), so
   about one melting dipole in twelve is removed instead of becoming water. The melted
@@ -105,6 +105,17 @@ Three things are done by default, each with a switch:
   over a full melt), which a free particle's cannot. Each frame is written shifted by whole
   cells so that its centre of mass stays within half a cell of where it started; the
   simulation itself is not changed. `recentre=.false.` writes lattice coordinates.
+
+- **Minimum water thickness.** Discrete-dipole scattering codes misrepresent water that is
+  only one dipole thick (absorption too low by a third or more at Ku and Ka band), and
+  melting starts as scattered single water dipoles and one-dipole films. Before each frame
+  is written the water is gathered until every water dipole lies in a 2 x 2 x 2 cube of
+  water: thin water next to a nearly complete cube moves in to complete it, nearest first,
+  travelling along the particle surface. A few dipoles (about ten at most on the test below)
+  can be left over where no cube can be completed, and the first frames, with only a handful
+  of cubes, move water furthest. On a 12,708-dipole test particle 95 to 100% of the water
+  lies in such cubes in every frame, against 0% at 2% melted and 48% at 10% melted without
+  the rule. `water_thick` sets the cube size (default 2); `water_thick=1` turns it off.
 
 Test shapes and analysis scripts are in `scripts/proto/`;
 `python3 scripts/proto/axes.py FRAME...` prints axis ratios, body counts and the centroid.
