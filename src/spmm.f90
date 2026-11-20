@@ -33,13 +33,21 @@ program spmm_main    !** (the name spmm is taken by the namelist group)
   !** cells so that its centre of mass stays within half a cell of where it started.
   logical  :: recentre = .true.
   real(dp) :: cm0(3)
+  !** Discrete-dipole scattering codes misrepresent water that is only one dipole thick (absorption
+  !** low by a third or more), so before each frame is written the water is gathered until every
+  !** water point lies in a cube of water_thick x water_thick x water_thick water points: thin
+  !** water next to a nearly complete cube moves in to complete it, nearest first, travelling along
+  !** the particle surface.  A few points can be left over when no cube can be completed.
+  !** water_thick <= 1 turns this off.
+  integer  :: water_thick = 2
+  integer  :: nco, nthin, totco = 0
   real(dp), parameter :: rho_ratio = 916.7_dp/999.84_dp
   real(dp) :: debt = 0.0_dp
   integer  :: N0, ngone = 0        !** points at the start, points removed on melting
   integer  :: max_sweeps = 40, max_final_sweeps = 20000, nheader = 1, seed = 12345, sweeps_hot = 0, final_hot = 0
   namelist /spmm/ shape_file, prefix, a_i, a_w, margin, rkern, p_melt, move_frac, dfmax, temp, temp_final, sweeps_hot, final_hot, &
        do_melt, pin_coating, nonlocal, check, max_sweeps, max_final_sweeps, nheader, seed, reattach, &
-       targets, dfmax_late, f_late, conserve_mass, recentre
+       targets, dfmax_late, f_late, conserve_mass, recentre, water_thick
   namelist /melt/ targets, dfmax, dfmax_late, f_late, seed
 
   real(dp), parameter :: eps = 1.0e-9_dp, pi = 3.141592653589793_dp
@@ -48,6 +56,7 @@ program spmm_main    !** (the name spmm is taken by the namelist group)
   integer, allocatable :: idx(:,:,:), mark(:,:,:), pos(:,:), comp(:), queue(:), koff(:,:)
   integer, allocatable :: wl(:), hpos(:,:), hcomp(:), worder(:), horder(:), cstw(:), csth(:), cnt(:)
   integer, allocatable :: bl(:), bq(:), bst(:)      !** body label, members body by body, start of each body
+  integer, allocatable :: wcl(:), wq(:)             !** water state of each point (see thicken_water), donor list
   integer(i1), allocatable :: btyp(:)
   !** nocc: occupied cells among the 26 neighbours of each cell, so interior dipoles are skipped cheaply.
   !** Water bodies are labelled over runs of water cells along x: rid is the run in each water cell,
@@ -128,6 +137,7 @@ program spmm_main    !** (the name spmm is taken by the namelist group)
   allocate(hpos(3, hcap), hcomp(hcap), hkey(hcap), horder(hcap))
   typ = 0_i1; S = 0.0_dp; idx = 0; mark = 0; sweepid = 0
   allocate(bl(N), bq(N), bst(N + 1), btyp(N))
+  allocate(wcl(N), wq(N))
   totre = 0; totst = 0
 
   !** pass 2: load
@@ -238,6 +248,7 @@ program spmm_main    !** (the name spmm is taken by the namelist group)
         if (nice == 0) exit meltloop
         if (itarget <= ntarg) then
            if (fliq >= targets(itarget) - 0.5_dp/N0) then
+              call thicken_water()
               call output_frac(fliq)
               do while (itarget <= ntarg)
                  if (fliq < targets(itarget) - 0.5_dp/N0) exit
@@ -260,6 +271,8 @@ program spmm_main    !** (the name spmm is taken by the namelist group)
      end do
      print '(A,I8,A,I8)', 'reattach: body shifts=', totre, ' blocked=', totst
   end if
+  call thicken_water()
+  if (water_thick > 1) print '(A,I9)', 'water thickness: points moved in all ', totco
   if (do_melt) then
      call output_frac(1.0_dp)
   else
@@ -561,6 +574,143 @@ contains
     end do passes
     if (check) call invariants('reattach')
   end subroutine reattach_bodies
+
+  !** water points and ice or out-of-range cells in the cube of side water_thick whose lowest corner is a
+  subroutine cube_count(a, nwat, nthn, ok)
+    integer, intent(in) :: a(3)
+    integer, intent(out) :: nwat, nthn
+    logical, intent(out) :: ok
+    integer :: ci, cj, ck, c(3)
+    integer(i1) :: t
+    nwat = 0; nthn = 0; ok = .true.
+    if (any(a < lo) .or. any(a + water_thick - 1 > hi)) then
+       ok = .false.; return
+    end if
+    do ci = 0, water_thick - 1; do cj = 0, water_thick - 1; do ck = 0, water_thick - 1
+       c = a + (/ci, cj, ck/); t = typ(c(1), c(2), c(3))
+       if (t == 1_i1) then
+          ok = .false.; return
+       else if (t == -1_i1) then
+          nwat = nwat + 1
+          if (wcl(idx(c(1), c(2), c(3))) == 1) nthn = nthn + 1
+       end if
+    end do; end do; end do
+  end subroutine cube_count
+
+  !** Gather thin water (see the declaration of water_thick).  wcl marks each point: 0 ice, 1 thin
+  !** water (in no all-water cube), 2 water inside an all-water cube, 3 thin water chosen to move.
+  !** Cubes holding at least one thin point and no ice are candidates; those already holding the
+  !** most water are completed first, by moving in the nearest thin points from outside the cube
+  !** (found by a breadth-first search through empty sites next to the particle).  Completing a
+  !** cube never thins water that is already thick, so the number of thin points only falls.
+  subroutine thicken_water()
+    integer :: t3, nn, pass, nc, ic, ci, cj, ck, a(3), c(3), pp(3), qq(3), ff(3), nwat, nthn, k, nd, mm, nb, nfill
+    integer :: qh, qt, nw
+    logical :: ok
+    real(dp) :: r1
+    nco = 0; nthin = 0
+    if (water_thick <= 1) return
+    t3 = water_thick**3
+    nw = 0
+    do nn = 1, N
+       pp = pos(:, nn)
+       if (typ(pp(1), pp(2), pp(3)) == -1_i1) then
+          wcl(nn) = 1; nw = nw + 1
+       else
+          wcl(nn) = 0
+       end if
+    end do
+    if (nw < t3) return
+    !** water already inside an all-water cube
+    do nn = 1, N
+       if (wcl(nn) /= 1) cycle
+       pp = pos(:, nn)
+       mark0: do ci = 0, water_thick - 1; do cj = 0, water_thick - 1; do ck = 0, water_thick - 1
+          a = pp - (/ci, cj, ck/)
+          call cube_count(a, nwat, nthn, ok)
+          if (ok .and. nwat == t3) then
+             call set_cube(a, 2); exit mark0
+          end if
+       end do; end do; end do mark0
+    end do
+    do pass = 1, 500
+       !** candidate cubes: every cube around a thin point that holds no ice
+       nc = 0
+       do nn = 1, N
+          if (wcl(nn) /= 1) cycle
+          pp = pos(:, nn)
+          do ci = 0, water_thick - 1; do cj = 0, water_thick - 1; do ck = 0, water_thick - 1
+             a = pp - (/ci, cj, ck/)
+             call cube_count(a, nwat, nthn, ok)
+             if (.not. ok .or. nc >= hcap) cycle
+             call random_number(r1)
+             nc = nc + 1; hpos(:, nc) = a; hkey(nc) = -real(nwat, dp) + 0.5_dp*r1; horder(nc) = nc
+          end do; end do; end do
+       end do
+       if (nc == 0) exit
+       call qsort(horder, 1, nc, hkey)
+       nfill = 0
+       do ic = 1, nc
+          a = hpos(:, horder(ic))
+          call cube_count(a, nwat, nthn, ok)
+          if (.not. ok .or. nthn == 0) cycle
+          k = t3 - nwat
+          !** the nearest k thin points outside the cube
+          sweepid = sweepid + 1; qt = 0; qh = 1; nd = 0
+          do ci = 0, water_thick - 1; do cj = 0, water_thick - 1; do ck = 0, water_thick - 1
+             c = a + (/ci, cj, ck/)
+             if (typ(c(1), c(2), c(3)) /= 0_i1) cycle
+             mark(c(1), c(2), c(3)) = sweepid; qt = qt + 1; rpos(:, qt) = c
+          end do; end do; end do
+          search: do while (qh <= qt .and. nd < k)
+             qq = rpos(:, qh); qh = qh + 1
+             do mm = 1, 26
+                ff = qq + pd(:, mm)
+                if (typ(ff(1), ff(2), ff(3)) == -1_i1) then
+                   nb = idx(ff(1), ff(2), ff(3))
+                   if (wcl(nb) == 1 .and. (any(ff < a) .or. any(ff > a + water_thick - 1))) then
+                      wcl(nb) = 3; nd = nd + 1; wq(nd) = nb
+                      if (nd == k) exit search
+                   end if
+                else if (typ(ff(1), ff(2), ff(3)) == 0_i1) then
+                   if (any(ff < lo) .or. any(ff > hi)) cycle
+                   if (mark(ff(1), ff(2), ff(3)) == sweepid .or. qt >= size(rpos, 2)) cycle
+                   if (nocc(ff(1), ff(2), ff(3)) < 1_i1) cycle      !** stay on the particle surface
+                   mark(ff(1), ff(2), ff(3)) = sweepid; qt = qt + 1; rpos(:, qt) = ff
+                end if
+             end do
+          end do search
+          if (nd < k) then
+             do mm = 1, nd; wcl(wq(mm)) = 1; end do
+             cycle
+          end if
+          nd = 0
+          do ci = 0, water_thick - 1; do cj = 0, water_thick - 1; do ck = 0, water_thick - 1
+             c = a + (/ci, cj, ck/)
+             if (typ(c(1), c(2), c(3)) /= 0_i1) cycle
+             nd = nd + 1; call move(wq(nd), c)
+          end do; end do; end do
+          call set_cube(a, 2)
+          nfill = nfill + 1; nco = nco + k
+       end do
+       if (nfill == 0) exit
+    end do
+    nthin = count(wcl(1:N) == 1)
+    totco = totco + nco
+    print '(A,I8,A,I8,A,I8)', 'water thickness: moved ', nco, ', thin points left ', nthin, ' of water ', nw
+    if (nco > 0 .and. reattach) then       !** a moved point may have been the only link between two pieces
+       call reattach_bodies(nre, nst); totre = totre + nre; totst = totst + nst
+    end if
+    if (check) call invariants('thicken water')
+  end subroutine thicken_water
+
+  subroutine set_cube(a, v)
+    integer, intent(in) :: a(3), v
+    integer :: ci, cj, ck
+    do ci = 0, water_thick - 1; do cj = 0, water_thick - 1; do ck = 0, water_thick - 1
+       wcl(idx(a(1) + ci, a(2) + cj, a(3) + ck)) = v
+    end do; end do; end do
+  end subroutine set_cube
 
   subroutine move(nn, h)
     integer, intent(in) :: nn, h(3)
